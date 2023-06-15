@@ -1,4 +1,4 @@
-package de.mpg.biochem.mars.fx.bdv;
+package de.mpg.biochem.mars.n5;
 
 import ij.IJ;
 import org.janelia.saalfeldlab.n5.N5Reader;
