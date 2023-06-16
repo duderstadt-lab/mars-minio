@@ -436,7 +436,10 @@ public class MarsN5Factory implements Serializable {
                 else if (uri.getHost().matches(".*s3\\..*")) {
                     String[] parts = uri.getHost().split("\\.",3);
                     String bucket = parts[0];
-                    String s3Url = "s3://" + bucket + uri.getPath();
+                    String path = uri.getPath();
+                    //ensures a single slash remains when no path is provided when opened by N5AmazonS3Reader.
+                    if (path.equals("/")) path = "//";
+                    String s3Url = "s3://" + bucket + path;
                     String endpointUrl = uri.getScheme() + "://" + parts[2] + ":" + uri.getPort();
                     return openAWSS3ReaderWithEndpoint(s3Url, endpointUrl);
                 }
