@@ -36,12 +36,16 @@ import io.scif.img.SCIFIOImgPlus;
 import net.imagej.DatasetService;
 import net.imagej.ImgPlus;
 import net.imagej.axis.AxisType;
+import net.imglib2.img.cell.CellImg;
+import net.imglib2.img.planar.PlanarImg;
+import net.imglib2.img.planar.PlanarImgFactory;
 import org.apache.commons.io.IOUtils;
 import org.janelia.saalfeldlab.n5.ij.N5Importer;
 import org.janelia.saalfeldlab.n5.imglib2.N5Utils;
 import org.janelia.saalfeldlab.n5.s3.N5AmazonS3Reader;
 import org.janelia.saalfeldlab.n5.universe.metadata.N5DatasetMetadata;
 import org.janelia.saalfeldlab.n5.universe.metadata.ome.ngff.v04.OmeNgffMetadataParser;
+import net.imglib2.img.cell.CellImgFactory;
 import org.scijava.Context;
 import org.scijava.ItemIO;
 import org.scijava.app.StatusService;
@@ -128,9 +132,8 @@ import de.mpg.biochem.mars.scifio.MarsMicromanagerFormat;
         label = MenuConstants.PLUGINS_LABEL, weight = MenuConstants.PLUGINS_WEIGHT,
         mnemonic = MenuConstants.PLUGINS_MNEMONIC), @Menu(label = "Mars",
         weight = MenuConstants.PLUGINS_WEIGHT, mnemonic = 'm'), @Menu(
-        label = "Image", weight = 1, mnemonic = 'i'), @Menu(label = "Util",
-        weight = 7, mnemonic = 'u'), @Menu(label = "Open N5 as ImagePlus",
-        weight = 11, mnemonic = 'o') })
+        label = "Import", weight = 1, mnemonic = 'i'),  @Menu(label = "Open N5 as ImagePlus (minio)",
+        weight = 20, mnemonic = 'o') })
 public class MarsOpenN5asImagePlusCommand extends DynamicCommand implements Command {
     /**
      * SERVICES
@@ -201,32 +204,11 @@ public class MarsOpenN5asImagePlusCommand extends DynamicCommand implements Comm
                         positions.add(p);
                         source.setPositions(positions);
 
-                        //meta.setFiltered(config.parserIsFiltered());
-
-		                //meta.setDatasetName(handle.get().getName());
-		                //meta.setSource(handle);
-		                //meta.setSourceLocation(handle.get());
-
                         parser.populateMetadata(jsonData, source, source, false);
                         source.populateImageMetadata();
 
-                        Dataset dataset = getImage(n5, datasetMeta, source);
-
-                        //System.out.println("dataset " + dataset.numDimensions() + " " + dataset.getImgPlus().dimensionsAsLongArray());
-
-                        //dataset.getProperties().put("scifio.metadata.global", source);
+                        Dataset dataset = getImage(n5, datasetMeta, source, selectionDialog.isVirtual());
                         uiService.show(dataset);
-
-
-                        //System.out.println(result);
-
-                        //FileInfo fileInfo = imp.getOriginalFileInfo();
-                        //if (fileInfo == null)
-                        //    fileInfo = new FileInfo();
-
-                        //fileInfo.url = rootPath + "?" + datasetMeta.getPath();
-                        //imp.setFileInfo(fileInfo);
-                        //imp.show();
                     } catch (final IOException e) {
                         IJ.error("failed to read n5");
                     } catch (FormatException e) {
@@ -236,37 +218,12 @@ public class MarsOpenN5asImagePlusCommand extends DynamicCommand implements Comm
 
         selectionDialog.run(callback);
     }
+
     @SuppressWarnings({"rawtypes", "unchecked"})
-    private <T extends NumericType<T> & NativeType<T>> Dataset getImage(final N5Reader n5, final N5DatasetMetadata datasetMeta, final boolean asVirtual) {
+    private <T extends NumericType<T> & NativeType<T>> Dataset getImage(final N5Reader n5, final N5DatasetMetadata datasetMeta, final Metadata metadata, final boolean asVirtual) {
         ExecutorService exec = Executors.newFixedThreadPool(8);
 
         final CachedCellImg imgRaw = N5Utils.open(n5, datasetMeta.getPath());
-
-        //Images are stored as XYZCT and we permute to XYCZT which is ImagePlus axis order
-        final RandomAccessibleInterval<T> imgView = Views.permute( imgRaw, 2, 3 );
-
-        ImagePlus imp;
-        if (asVirtual) {
-            imp = ImageJFunctions.wrap(imgView, datasetMeta.getName(), exec);
-        } else {
-            final ImagePlusImg<T, ?> ipImg = new ImagePlusImgFactory<>(Util.getTypeFromInterval(imgView)).create(imgView);
-            LoopBuilder.setImages(imgView, ipImg)
-                    .multiThreaded(new DefaultTaskExecutor(exec))
-                    .forEachPixel((x, y) -> y.set(x));
-
-            imp = ipImg.getImagePlus();
-        }
-
-        return convertService.convert(imp, Dataset.class);
-    }
-
-    @SuppressWarnings({"rawtypes", "unchecked"})
-    private <T extends NumericType<T> & NativeType<T>> Dataset getImage(final N5Reader n5, final N5DatasetMetadata datasetMeta, final Metadata metadata) {
-        ExecutorService exec = Executors.newFixedThreadPool(8);
-
-        final CachedCellImg imgRaw = N5Utils.open(n5, datasetMeta.getPath());
-        //Images are stored as XYZCT and we permute to XYCZT which is ImagePlus axis order
-        //final RandomAccessibleInterval<T> imgView = Views.permute( imgRaw, 2, 3 );
 
         AxisType[] axes = new AxisType[5];
         axes[0] = Axes.X;
@@ -275,32 +232,22 @@ public class MarsOpenN5asImagePlusCommand extends DynamicCommand implements Comm
         axes[3] = Axes.CHANNEL;
         axes[4] = Axes.TIME;
 
-        final SCIFIOImgPlus<T> imgPlus = new SCIFIOImgPlus(imgRaw, datasetMeta.getName(), axes);
-        imgPlus.setMetadata(metadata);
-        imgPlus.setImageMetadata(metadata.get(0));
-
-        final Dataset dataset = datasetService.create((ImgPlus) imgPlus);
-
-        return dataset;
-
-
-        /*ImagePlus imp;
+       Img<T> img;
         if (asVirtual) {
-            imp = ImageJFunctions.wrap(imgView, datasetMeta.getName(), exec);
+            img = imgRaw;
         } else {
-            final ImagePlusImg<T, ?> ipImg = new ImagePlusImgFactory<>(Util.getTypeFromInterval(imgView)).create(imgView);
-            LoopBuilder.setImages(imgView, ipImg)
+            final PlanarImg<T, ?> planarImg = new PlanarImgFactory<>(Util.getTypeFromInterval((RandomAccessibleInterval<T>) imgRaw)).create(imgRaw);
+            LoopBuilder.setImages((RandomAccessibleInterval<T>) imgRaw, planarImg)
                     .multiThreaded(new DefaultTaskExecutor(exec))
                     .forEachPixel((x, y) -> y.set(x));
 
-            imp = ipImg.getImagePlus();
+            img = planarImg;
         }
 
-        return convertService.convert(imp, Dataset.class);
-         */
-    }
+        final SCIFIOImgPlus<T> imgPlus = new SCIFIOImgPlus(img, datasetMeta.getName(), axes);
+        imgPlus.setMetadata(metadata);
+        imgPlus.setImageMetadata(metadata.get(0));
 
-    private String getMetadataString(String url) {
-        return "";
+        return datasetService.create((ImgPlus) imgPlus);
     }
 }
