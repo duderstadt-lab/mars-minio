@@ -94,8 +94,10 @@ public class MarsN5Factory implements Serializable {
     private int[] hdf5DefaultBlockSize = {64, 64, 64, 1, 1};
     private boolean hdf5OverrideBlockSize = false;
     private GsonBuilder gsonBuilder = new GsonBuilder();
+    private boolean cacheAttributes = true;
     private String zarrDimensionSeparator = ".";
     private boolean zarrMapN5DatasetAttributes = true;
+    private boolean zarrMergeAttributes = true;
     private String googleCloudProjectId = null;
 
     public MarsN5Factory hdf5DefaultBlockSize(final int... blockSize) {
@@ -245,7 +247,7 @@ public class MarsN5Factory implements Serializable {
      */
     public N5ZarrReader openZarrReader(final String path) throws IOException {
 
-        return new N5ZarrReader(path, gsonBuilder, zarrDimensionSeparator, zarrMapN5DatasetAttributes);
+        return new N5ZarrReader(path, gsonBuilder, zarrMapN5DatasetAttributes, zarrMergeAttributes, cacheAttributes);
     }
 
     /**
@@ -292,9 +294,12 @@ public class MarsN5Factory implements Serializable {
      * @throws IOException the io exception
      */
     public N5AmazonS3Reader openAWSS3Reader(final String url) throws IOException {
+        AmazonS3URI s3uri = new AmazonS3URI(url);
+
         return new N5AmazonS3Reader(
                 createS3(url),
-                new AmazonS3URI(url),
+                s3uri.getBucket(),
+                s3uri.getKey(),
                 gsonBuilder);
     }
 
@@ -307,9 +312,12 @@ public class MarsN5Factory implements Serializable {
      * @throws IOException the io exception
      */
     public N5AmazonS3Reader openAWSS3ReaderWithEndpoint(final String s3Url, final String endpointUrl) throws IOException {
+        AmazonS3URI s3uri = new AmazonS3URI(s3Url);
+
         return new N5AmazonS3Reader(
                 createS3WithEndpoint(endpointUrl),
-                new AmazonS3URI(s3Url),
+                s3uri.getBucket(),
+                s3uri.getKey(),
                 gsonBuilder);
     }
 
@@ -334,8 +342,9 @@ public class MarsN5Factory implements Serializable {
      * @return the N5ZarrWriter
      * @throws IOException the io exception
      */
-    public N5ZarrWriter openZarrWriter(final String path) throws IOException {
-        return new N5ZarrWriter(path, gsonBuilder, zarrDimensionSeparator, zarrMapN5DatasetAttributes);
+    public N5ZarrWriter openZarrWriter(final String path) {
+
+        return new N5ZarrWriter(path, gsonBuilder, zarrDimensionSeparator, zarrMapN5DatasetAttributes, true);
     }
 
     /**
@@ -389,10 +398,12 @@ public class MarsN5Factory implements Serializable {
      * @throws IOException the io exception
      */
     public N5AmazonS3Writer openAWSS3Writer(final String url) throws IOException {
+        AmazonS3URI s3uri = new AmazonS3URI(url);
 
         return new N5AmazonS3Writer(
                 createS3(url),
-                new AmazonS3URI(url),
+                s3uri.getBucket(),
+                s3uri.getKey(),
                 gsonBuilder);
     }
 
@@ -405,10 +416,12 @@ public class MarsN5Factory implements Serializable {
      * @throws IOException the io exception
      */
     public N5AmazonS3Writer openAWSS3WriterWithEndpoint(final String s3Url, final String endpointUrl) throws IOException {
+        AmazonS3URI s3uri = new AmazonS3URI(s3Url);
 
         return new N5AmazonS3Writer(
                 createS3WithEndpoint(endpointUrl),
-                new AmazonS3URI(s3Url),
+                s3uri.getBucket(),
+                s3uri.getKey(),
                 gsonBuilder);
     }
 
