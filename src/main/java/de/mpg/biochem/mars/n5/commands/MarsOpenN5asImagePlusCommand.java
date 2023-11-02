@@ -28,7 +28,6 @@
  */
 package de.mpg.biochem.mars.n5.commands;
 
-import com.amazonaws.services.s3.AmazonS3;
 import ij.*;
 import ij.io.FileInfo;
 import io.scif.FormatException;
@@ -36,18 +35,13 @@ import io.scif.img.SCIFIOImgPlus;
 import net.imagej.DatasetService;
 import net.imagej.ImgPlus;
 import net.imagej.axis.AxisType;
-import net.imglib2.img.cell.CellImg;
 import net.imglib2.img.planar.PlanarImg;
 import net.imglib2.img.planar.PlanarImgFactory;
 import org.apache.commons.io.IOUtils;
-import org.janelia.saalfeldlab.n5.ij.N5Importer;
 import org.janelia.saalfeldlab.n5.imglib2.N5Utils;
 import org.janelia.saalfeldlab.n5.s3.N5AmazonS3Reader;
 import org.janelia.saalfeldlab.n5.universe.metadata.N5DatasetMetadata;
 import org.janelia.saalfeldlab.n5.universe.metadata.ome.ngff.v04.OmeNgffMetadataParser;
-import net.imglib2.img.cell.CellImgFactory;
-import org.scijava.Context;
-import org.scijava.ItemIO;
 import org.scijava.app.StatusService;
 import org.scijava.command.Command;
 import org.scijava.command.DynamicCommand;
@@ -58,74 +52,43 @@ import org.scijava.plugin.Menu;
 import org.scijava.plugin.Parameter;
 import org.scijava.plugin.Plugin;
 
-import net.imagej.axis.Axis;
 import net.imagej.axis.Axes;
 
-import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.function.Consumer;
-import java.util.stream.Collectors;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import net.imglib2.cache.img.CachedCellImg;
 import net.imglib2.type.numeric.NumericType;
 import net.imagej.Dataset;
-import ij.ImagePlus;
-import net.imagej.DatasetService;
 import net.imglib2.RandomAccessibleInterval;
-import net.imglib2.img.ImagePlusAdapter;
 import net.imglib2.img.Img;
-import net.imglib2.img.display.imagej.ImageJFunctions;
-import net.imglib2.interpolation.randomaccess.NLinearInterpolatorFactory;
-import net.imglib2.realtransform.AffineTransform2D;
-import net.imglib2.realtransform.RealViews;
 import net.imglib2.type.NativeType;
-import net.imglib2.type.numeric.RealType;
-import net.imglib2.view.Views;
 
 import de.mpg.biochem.mars.n5.*;
-import org.janelia.saalfeldlab.n5.DatasetAttributes;
 import org.janelia.saalfeldlab.n5.N5Reader;
 import org.janelia.saalfeldlab.n5.ij.N5Importer.N5BasePathFun;
-import org.janelia.saalfeldlab.n5.metadata.*;
 import org.janelia.saalfeldlab.n5.metadata.imagej.ImagePlusLegacyMetadataParser;
 import org.janelia.saalfeldlab.n5.ui.DataSelection;
 import org.janelia.saalfeldlab.n5.ui.DatasetSelectorDialog;
 import org.janelia.saalfeldlab.n5.ui.N5DatasetTreeCellRenderer;
 
-import org.janelia.saalfeldlab.n5.universe.metadata.N5CosemMetadata;
 import org.janelia.saalfeldlab.n5.universe.metadata.N5CosemMetadataParser;
-import org.janelia.saalfeldlab.n5.universe.metadata.N5CosemMultiScaleMetadata;
-import org.janelia.saalfeldlab.n5.universe.metadata.N5DatasetMetadata;
 import org.janelia.saalfeldlab.n5.universe.metadata.N5GenericSingleScaleMetadataParser;
-import org.janelia.saalfeldlab.n5.universe.metadata.N5Metadata;
 import org.janelia.saalfeldlab.n5.universe.metadata.N5MetadataParser;
-import org.janelia.saalfeldlab.n5.universe.metadata.N5SingleScaleMetadata;
 import org.janelia.saalfeldlab.n5.universe.metadata.N5SingleScaleMetadataParser;
-import org.janelia.saalfeldlab.n5.universe.metadata.N5ViewerMultiscaleMetadataParser;
-import org.janelia.saalfeldlab.n5.universe.metadata.axes.AxisMetadata;
-import org.janelia.saalfeldlab.n5.universe.metadata.axes.AxisUtils;
-import org.janelia.saalfeldlab.n5.universe.metadata.canonical.CanonicalDatasetMetadata;
 import org.janelia.saalfeldlab.n5.universe.metadata.canonical.CanonicalMetadataParser;
-import org.janelia.saalfeldlab.n5.universe.metadata.canonical.CanonicalSpatialDatasetMetadata;
-import org.janelia.saalfeldlab.n5.universe.metadata.ome.ngff.v04.OmeNgffMetadataParser;
 
-import net.imglib2.img.imageplus.ImagePlusImg;
-import net.imglib2.img.imageplus.ImagePlusImgFactory;
 import net.imglib2.loops.LoopBuilder;
 import net.imglib2.util.Util;
-import net.imglib2.view.Views;
 import net.imglib2.parallel.DefaultTaskExecutor;
 import org.scijava.ui.UIService;
 import io.scif.Metadata;
-
 import de.mpg.biochem.mars.scifio.MarsMicromanagerFormat;
 
 @Plugin(type = Command.class, label = "Open N5 as ImagePlus", menu = { @Menu(
@@ -208,6 +171,7 @@ public class MarsOpenN5asImagePlusCommand extends DynamicCommand implements Comm
                         source.populateImageMetadata();
 
                         Dataset dataset = getImage(n5, datasetMeta, source, selectionDialog.isVirtual());
+                        dataset.setSource(rootPath + datasetPath);
                         uiService.show(dataset);
                     } catch (final IOException e) {
                         IJ.error("failed to read n5");
