@@ -144,7 +144,7 @@ public class MarsN5Factory implements Serializable {
             return false;
     }
 
-    public static boolean isHDF5Reader(final String path) throws FileNotFoundException, IOException {
+    public static boolean isHDF5Reader(final String path) throws IOException {
 
         if (Files.isRegularFile(Paths.get(path))) {
             /* optimistic */
@@ -228,9 +228,8 @@ public class MarsN5Factory implements Serializable {
      *
      * @param path path to the n5 root folder
      * @return the N5FsReader
-     * @throws IOException the io exception
      */
-    public N5FSReader openFSReader(final String path) throws IOException {
+    public N5FSReader openFSReader(final String path) {
 
         return new N5FSReader(path, gsonBuilder);
     }
@@ -243,9 +242,8 @@ public class MarsN5Factory implements Serializable {
      *
      * @param path path to the zarr directory
      * @return the N5ZarrReader
-     * @throws IOException the io exception
      */
-    public N5ZarrReader openZarrReader(final String path) throws IOException {
+    public N5ZarrReader openZarrReader(final String path) {
 
         return new N5ZarrReader(path, gsonBuilder, zarrMapN5DatasetAttributes, zarrMergeAttributes, cacheAttributes);
     }
@@ -259,9 +257,8 @@ public class MarsN5Factory implements Serializable {
      *
      * @param path path to the hdf5 file
      * @return the N5HDF5Reader
-     * @throws IOException the io exception
      */
-    public N5HDF5Reader openHDF5Reader(final String path) throws IOException {
+    public N5HDF5Reader openHDF5Reader(final String path) {
 
         return new N5HDF5Reader(path, hdf5OverrideBlockSize, gsonBuilder, hdf5DefaultBlockSize);
     }
@@ -271,9 +268,8 @@ public class MarsN5Factory implements Serializable {
      *
      * @param url url to the google cloud object
      * @return the N5GoogleCloudStorageReader
-     * @throws IOException the io exception
      */
-    public N5GoogleCloudStorageReader openGoogleCloudReader(final String url) throws IOException {
+    public N5GoogleCloudStorageReader openGoogleCloudReader(final String url) {
 
         final GoogleCloudStorageClient storageClient = new GoogleCloudStorageClient();
         final Storage storage = storageClient.create();
@@ -291,9 +287,8 @@ public class MarsN5Factory implements Serializable {
      *
      * @param url url to the amazon s3 object
      * @return the N5AmazonS3Reader
-     * @throws IOException the io exception
      */
-    public N5AmazonS3Reader openAWSS3Reader(final String url) throws IOException {
+    public N5AmazonS3Reader openAWSS3Reader(final String url) {
         AmazonS3URI s3uri = new AmazonS3URI(url);
 
         return new N5AmazonS3Reader(
@@ -309,9 +304,8 @@ public class MarsN5Factory implements Serializable {
      * @param s3Url url to the amazon s3 object
      * @param endpointUrl endpoint url for the server
      * @return the N5AmazonS3Reader
-     * @throws IOException the io exception
      */
-    public N5AmazonS3Reader openAWSS3ReaderWithEndpoint(final String s3Url, final String endpointUrl) throws IOException {
+    public N5AmazonS3Reader openAWSS3ReaderWithEndpoint(final String s3Url, final String endpointUrl) {
         AmazonS3URI s3uri = new AmazonS3URI(s3Url);
 
         return new N5AmazonS3Reader(
@@ -326,9 +320,8 @@ public class MarsN5Factory implements Serializable {
      *
      * @param path path to the n5 directory
      * @return the N5FSWriter
-     * @throws IOException the io exception
      */
-    public N5FSWriter openFSWriter(final String path) throws IOException {
+    public N5FSWriter openFSWriter(final String path) {
         return new N5FSWriter(path, gsonBuilder);
     }
 
@@ -340,7 +333,6 @@ public class MarsN5Factory implements Serializable {
      *
      * @param path path to the zarr directory
      * @return the N5ZarrWriter
-     * @throws IOException the io exception
      */
     public N5ZarrWriter openZarrWriter(final String path) {
 
@@ -357,9 +349,8 @@ public class MarsN5Factory implements Serializable {
      *
      * @param path path to the hdf5 file
      * @return the N5HDF5Writer
-     * @throws IOException the io exception
      */
-    public N5HDF5Writer openHDF5Writer(final String path) throws IOException {
+    public N5HDF5Writer openHDF5Writer(final String path) {
         return new N5HDF5Writer(path, hdf5OverrideBlockSize, gsonBuilder, hdf5DefaultBlockSize);
     }
 
@@ -368,9 +359,8 @@ public class MarsN5Factory implements Serializable {
      *
      * @param url url to the google cloud object
      * @return the N5GoogleCloudStorageWriter
-     * @throws IOException the io exception
      */
-    public N5GoogleCloudStorageWriter openGoogleCloudWriter(final String url) throws IOException {
+    public N5GoogleCloudStorageWriter openGoogleCloudWriter(final String url) {
         final GoogleCloudStorageClient storageClient;
         if (googleCloudProjectId == null) {
             final ResourceManager resourceManager = new GoogleCloudResourceManagerClient().create();
@@ -395,9 +385,8 @@ public class MarsN5Factory implements Serializable {
      *
      * @param url url to the s3 object
      * @return the N5AmazonS3Writer
-     * @throws IOException the io exception
      */
-    public N5AmazonS3Writer openAWSS3Writer(final String url) throws IOException {
+    public N5AmazonS3Writer openAWSS3Writer(final String url) {
         AmazonS3URI s3uri = new AmazonS3URI(url);
 
         return new N5AmazonS3Writer(
@@ -413,9 +402,8 @@ public class MarsN5Factory implements Serializable {
      * @param s3Url url to the s3 object
      * @param endpointUrl endpoint url to the server
      * @return the N5AmazonS3Writer
-     * @throws IOException the io exception
      */
-    public N5AmazonS3Writer openAWSS3WriterWithEndpoint(final String s3Url, final String endpointUrl) throws IOException {
+    public N5AmazonS3Writer openAWSS3WriterWithEndpoint(final String s3Url, final String endpointUrl) {
         AmazonS3URI s3uri = new AmazonS3URI(s3Url);
 
         return new N5AmazonS3Writer(
@@ -471,9 +459,8 @@ public class MarsN5Factory implements Serializable {
      *
      * @param url the location of the root location of the store
      * @return the N5Writer
-     * @throws IOException the io exception
      */
-    public N5Writer openWriter(final String url) throws IOException {
+    public N5Writer openWriter(final String url) {
 
         try {
             final URI uri = new URI(url);
