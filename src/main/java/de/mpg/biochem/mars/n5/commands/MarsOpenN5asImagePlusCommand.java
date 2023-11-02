@@ -170,8 +170,8 @@ public class MarsOpenN5asImagePlusCommand extends DynamicCommand implements Comm
                         parser.populateMetadata(jsonData, source, source, false);
                         source.populateImageMetadata();
 
-                        Dataset dataset = getImage(n5, datasetMeta, source, selectionDialog.isVirtual());
-                        dataset.setSource(rootPath + datasetPath);
+                        Dataset dataset = getImage(n5, datasetMeta, source, datasetPath, selectionDialog.isVirtual());
+                        dataset.setSource(rootPath + (datasetPath.startsWith("/") ? datasetPath.substring(1) : datasetPath));
                         uiService.show(dataset);
                     } catch (final IOException e) {
                         IJ.error("failed to read n5");
@@ -184,7 +184,7 @@ public class MarsOpenN5asImagePlusCommand extends DynamicCommand implements Comm
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
-    private <T extends NumericType<T> & NativeType<T>> Dataset getImage(final N5Reader n5, final N5DatasetMetadata datasetMeta, final Metadata metadata, final boolean asVirtual) {
+    private <T extends NumericType<T> & NativeType<T>> Dataset getImage(final N5Reader n5, final N5DatasetMetadata datasetMeta, final Metadata metadata, final String datasetPath, final boolean asVirtual) {
         ExecutorService exec = Executors.newFixedThreadPool(8);
 
         final CachedCellImg imgRaw = N5Utils.open(n5, datasetMeta.getPath());
@@ -208,7 +208,7 @@ public class MarsOpenN5asImagePlusCommand extends DynamicCommand implements Comm
             img = planarImg;
         }
 
-        final SCIFIOImgPlus<T> imgPlus = new SCIFIOImgPlus(img, datasetMeta.getName(), axes);
+        final SCIFIOImgPlus<T> imgPlus = new SCIFIOImgPlus(img, datasetPath.startsWith("/") ? datasetPath.substring(1) : datasetPath, axes);
         imgPlus.setMetadata(metadata);
         imgPlus.setImageMetadata(metadata.get(0));
 
