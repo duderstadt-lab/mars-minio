@@ -11,7 +11,7 @@
 
 	<groupId>de.mpg.biochem</groupId>
 	<artifactId>mars-minio</artifactId>
-	<version>0.2-SNAPSHOT</version>
+	<version>0.2</version>
 
 	<name>mars-minio</name>
 	<description>Mars N5 source and reader implementations.</description>
@@ -61,7 +61,7 @@
 	<scm>
 		<connection>scm:git:git://github.com/duderstadt-lab/mars-minio</connection>
 		<developerConnection>scm:git:git@github.com:duderstadt-lab/mars-minio</developerConnection>
-		<tag>HEAD</tag>
+		<tag>mars-minio-0.2</tag>
 		<url>https://github.com/duderstadt-lab/mars-minio</url>
 	</scm>
 	<issueManagement>
