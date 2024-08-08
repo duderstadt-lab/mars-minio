@@ -175,8 +175,8 @@ public class MarsOpenN5asImagePlusCommand extends DynamicCommand implements Comm
             new N5GenericSingleScaleMetadataParser()
     };
 
-    private AmazonS3 s3;
-    private String bucketName;
+    //private AmazonS3 s3;
+    //private String bucketName;
 
     @Override
     public void run() {
@@ -269,12 +269,12 @@ public class MarsOpenN5asImagePlusCommand extends DynamicCommand implements Comm
         return datasetService.create((ImgPlus) imgPlus);
     }
 
-    private InputStream getMetadataInputStream(String rootPath, String datasetPath) {
+    public static InputStream getMetadataInputStream(String rootPath, String datasetPath) {
         try {
             final URI uri = new URI(rootPath);
             final String scheme = uri.getScheme();
             String[] parts = uri.getHost().split("\\.",3);
-            bucketName = parts[0];
+            String bucketName = parts[0];
             String path = uri.getPath();
             //ensures a single slash remains when no path is provided when opened by N5AmazonS3Reader.
             if (path.equals("/")) path = "//";
@@ -292,27 +292,32 @@ public class MarsOpenN5asImagePlusCommand extends DynamicCommand implements Comm
                     new AWSStaticCredentialsProvider(credentials == null ? new AnonymousAWSCredentials() : credentials);
 
             //US_EAST_2 is used as a dummy region.
-            s3 = AmazonS3ClientBuilder.standard()
+            AmazonS3 s3 = AmazonS3ClientBuilder.standard()
                     .withPathStyleAccessEnabled(true)
                     .withEndpointConfiguration(new AwsClientBuilder.EndpointConfiguration(endpointUrl, Regions.US_EAST_2.getName()))
                     .withCredentials(credentialsProvider)
                     .build();
 
-            return new LocalS3ObjectChannel(key, true).newInputStream();
+            if (s3.doesObjectExist(bucketName, key))
+                return new LocalS3ObjectChannel(s3, bucketName, key,true).newInputStream();
+            else return null;
 
         } catch (final URISyntaxException e) {
             return null;
         }
     }
 
-    private class LocalS3ObjectChannel implements LockedChannel {
+    private static class LocalS3ObjectChannel implements LockedChannel {
 
+        private final String bucketName;
+        private final AmazonS3 s3;
         protected final String path;
         final boolean readOnly;
         private final ArrayList<Closeable> resources = new ArrayList<>();
 
-        protected LocalS3ObjectChannel(final String path, final boolean readOnly) {
-
+        protected LocalS3ObjectChannel(final AmazonS3 s3, final String bucketName, final String path, final boolean readOnly) {
+            this.s3 = s3;
+            this.bucketName = bucketName;
             this.path = path;
             this.readOnly = readOnly;
         }
