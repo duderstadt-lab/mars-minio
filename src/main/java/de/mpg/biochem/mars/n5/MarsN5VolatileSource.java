@@ -41,13 +41,15 @@ import net.imglib2.cache.volatiles.CacheHints;
 import net.imglib2.cache.volatiles.LoadingStrategy;
 import net.imglib2.realtransform.AffineTransform3D;
 import net.imglib2.type.numeric.NumericType;
+import net.imglib2.util.ConstantUtils;
+import net.imglib2.FinalInterval;
 
 public class MarsN5VolatileSource<T extends NumericType<T>, V extends Volatile<T> & NumericType<V>>
 	extends AbstractSource<V>
 {
 
 	private final MarsN5Source<T> source;
-
+	private RandomAccessibleInterval<V> volatileZerosRAI;
 	private SharedQueue queue;
 
 	public MarsN5VolatileSource(final MarsN5Source<T> source, final V type,
@@ -66,8 +68,36 @@ public class MarsN5VolatileSource<T extends NumericType<T>, V extends Volatile<T
 
 	@Override
 	public RandomAccessibleInterval<V> getSource(final int t, final int level) {
-		return VolatileViews.wrapAsVolatile(source.getSource(t, level), queue,
-			new CacheHints(LoadingStrategy.VOLATILE, level, true));
+		// Get the source from MarsN5Source
+		RandomAccessibleInterval<T> rai = source.getSource(t, level);
+
+		if (!source.timePointExists(t, level)) {
+			// Create or reuse the volatile zeros RAI
+			if (volatileZerosRAI == null || !dimensionsMatch(volatileZerosRAI, rai)) {
+				V vType = getType();
+				vType.setZero();
+				vType.setValid(true); // Mark the volatile type as valid
+
+				FinalInterval interval = new FinalInterval(rai);
+				volatileZerosRAI = ConstantUtils.constantRandomAccessibleInterval(vType, interval);
+			}
+			return volatileZerosRAI;
+		}
+
+		// For normal cases, wrap as volatile as before
+		return VolatileViews.wrapAsVolatile(rai, queue,
+				new CacheHints(LoadingStrategy.VOLATILE, level, true));
+	}
+
+	// Helper method to check if two RAIs have the same dimensions
+	private boolean dimensionsMatch(RandomAccessibleInterval<?> rai1, RandomAccessibleInterval<?> rai2) {
+		if (rai1.numDimensions() != rai2.numDimensions()) return false;
+
+		for (int d = 0; d < rai1.numDimensions(); d++) {
+			if (rai1.dimension(d) != rai2.dimension(d)) return false;
+		}
+
+		return true;
 	}
 
 	@Override

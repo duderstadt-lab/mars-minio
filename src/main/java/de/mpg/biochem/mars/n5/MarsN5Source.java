@@ -35,12 +35,14 @@ import bdv.util.AbstractSource;
 import bdv.util.volatiles.SharedQueue;
 import bdv.util.volatiles.VolatileTypeMatcher;
 import mpicbg.spim.data.sequence.VoxelDimensions;
+import net.imglib2.FinalInterval;
 import net.imglib2.RandomAccessibleInterval;
 import net.imglib2.Volatile;
 import net.imglib2.img.Img;
 import net.imglib2.realtransform.AffineTransform3D;
 import net.imglib2.type.NativeType;
 import net.imglib2.type.numeric.NumericType;
+import net.imglib2.util.ConstantUtils;
 import net.imglib2.view.Views;
 
 public class MarsN5Source<T extends NumericType<T>> extends AbstractSource<T> {
@@ -62,12 +64,12 @@ public class MarsN5Source<T extends NumericType<T>> extends AbstractSource<T> {
 	public RandomAccessibleInterval<T> getSource(final int t, final int level) {
 		if (images[level].numDimensions() == 2 && t == 0) return Views.addDimension(
 			images[level], 0, 0);
-		else if (images[level].numDimensions() == 2 && t != 0) return Views
-			.addDimension(((Img) images[level]).factory().create(images[level]), 0,
-				0);
-		else if (images[level].dimension(images[level].numDimensions() - 1) <= t)
-			return Views.addDimension(((Img) images[level]).factory().create(
-				images[level]), 0, 0);
+		else if (images[level].numDimensions() == 2 && t != 0) {
+			return createEmptySource(level);
+		}
+		else if (images[level].dimension(images[level].numDimensions() - 1) <= t) {
+			return createEmptySource(level);
+		}
 
 		RandomAccessibleInterval<T> img = Views.hyperSlice(images[level],
 			images[level].numDimensions() - 1, t);
@@ -75,6 +77,28 @@ public class MarsN5Source<T extends NumericType<T>> extends AbstractSource<T> {
 		if (img.numDimensions() > 2) return img;
 		else return Views.addDimension(img, 0, 0);
 	}
+
+	private RandomAccessibleInterval<T> createEmptySource(final int level) {
+		// Create a constant RAI using ConstantUtils
+		T type = getType();
+		type.setZero(); // Set the sample value to zero
+
+		// Get dimensions from the original image for the first two dimensions
+		long[] dimensions = new long[3]; // We'll create a 3D RAI
+		dimensions[0] = images[level].dimension(0);
+		dimensions[1] = images[level].dimension(1);
+		dimensions[2] = 1; // Single slice in Z
+
+		FinalInterval interval = new FinalInterval(dimensions);
+		return ConstantUtils.constantRandomAccessibleInterval(type, interval);
+	}
+
+	public boolean timePointExists(final int t, final int level) {
+		if (images[level].numDimensions() == 2 && t != 0) {
+			return false;
+		}
+		else return images[level].dimension(images[level].numDimensions() - 1) > t;
+    }
 
 	@Override
 	public synchronized void getSourceTransform(final int t, final int level,
