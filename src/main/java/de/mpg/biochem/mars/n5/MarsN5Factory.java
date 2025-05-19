@@ -437,9 +437,10 @@ public class MarsN5Factory implements Serializable {
                 else if (uri.getHost().matches(".*s3\\..*")) {
                     String[] parts = uri.getHost().split("\\.",3);
                     String bucket = parts[0];
-                    String path = "/" + uri.getPath();
-                    //ensures a single slash remains when no path is provided when opened by N5AmazonS3Reader.
-                    if (path.equals("/")) path = "//";
+                    //Adding these slashes seems to overcome downstream processing of problematic paths like those with dates in the 12.12.2024 format
+                    //in folder names. This could create issues in future release as they continue to change the path processing.
+                    //This also ensures there is at least one slash when no path is provided when opened by N5AmazonS3Reader.
+                    String path = "///" + uri.getPath();
                     String s3Url = "s3://" + bucket + path;
                     String endpointUrl = uri.getScheme() + "://" + parts[2] + ":" + uri.getPort();
                     return openAWSS3ReaderWithEndpoint(s3Url, endpointUrl);
