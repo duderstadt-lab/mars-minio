@@ -2,7 +2,7 @@
  * #%L
  * Mars N5 source and reader implementations.
  * %%
- * Copyright (C) 2023 - 2024 Karl Duderstadt
+ * Copyright (C) 2023 - 2025 Karl Duderstadt
  * %%
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
