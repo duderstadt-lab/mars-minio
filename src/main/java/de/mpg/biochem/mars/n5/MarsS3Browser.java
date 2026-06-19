@@ -227,4 +227,53 @@ public class MarsS3Browser implements AutoCloseable {
                         endpoint, Regions.US_EAST_2.getName())).withCredentials(
                         credentialsProvider).build();
     }
+
+    /** Parsed components of a canonical Mars N5 URL. */
+    public static final class ParsedPath {
+        public final String server;  // https://minio.sdmm.nat.tum.de:9000/
+        public final String bucket;  // cmg
+        public final String n5Root;  // 02092024/02092024-lane1/....n5 (no leading slash)
+
+        public ParsedPath(String server, String bucket, String n5Root) {
+            this.server = server;
+            this.bucket = bucket;
+            this.n5Root = n5Root;
+        }
+    }
+
+    /**
+     * Inverse of {@link #buildPath}. Parses a canonical Mars N5 URL of the form
+     * scheme://bucket.s3.host[:port]/path into server, bucket and n5Root. Returns
+     * null if the URL isn't in that form (e.g. a local path or unrecognized host).
+     */
+    public static ParsedPath parsePath(final String fullPath) {
+        if (fullPath == null || fullPath.isEmpty()) return null;
+        try {
+            final URI uri = new URI(fullPath);
+            final String scheme = uri.getScheme();
+            final String host = uri.getHost();
+            if (scheme == null || host == null) return null;
+
+            // host = bucket.s3.<server-host>
+            final int s3Idx = host.indexOf(".s3.");
+            if (s3Idx < 0) return null;
+
+            final String bucket = host.substring(0, s3Idx);
+            final String serverHost = host.substring(s3Idx + ".s3.".length());
+
+            final StringBuilder server = new StringBuilder();
+            server.append(scheme).append("://").append(serverHost);
+            if (uri.getPort() > -1) server.append(":").append(uri.getPort());
+            server.append("/");
+
+            String path = uri.getPath();
+            while (path.startsWith("/"))
+                path = path.substring(1);
+
+            return new ParsedPath(server.toString(), bucket, path);
+        }
+        catch (URISyntaxException e) {
+            return null;
+        }
+    }
 }
