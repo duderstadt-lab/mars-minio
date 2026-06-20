@@ -250,6 +250,39 @@ public class MarsS3Browser implements AutoCloseable {
     }
 
     /**
+     * List object "files" (not folders) directly under the given prefix in a
+     * bucket, using the "/" delimiter. Returns the last path segment of each
+     * object key at this level (excludes the zero-byte folder-marker objects).
+     */
+    public List<String> listFiles(final String bucket, final String prefix) {
+        final String norm = (prefix == null || prefix.isEmpty()) ? "" : (prefix
+                .endsWith("/") ? prefix : prefix + "/");
+
+        final List<String> files = new ArrayList<>();
+        ListObjectsV2Request req = new ListObjectsV2Request().withBucketName(bucket)
+                .withPrefix(norm).withDelimiter("/");
+
+        ListObjectsV2Result result;
+        do {
+            result = s3.listObjectsV2(req);
+            for (com.amazonaws.services.s3.model.S3ObjectSummary summary : result
+                    .getObjectSummaries())
+            {
+                String key = summary.getKey();
+                // Skip the prefix itself (folder marker) and anything not at this level.
+                if (key.equals(norm)) continue;
+                String name = key.substring(norm.length());
+                if (name.isEmpty() || name.contains("/")) continue; // deeper level
+                files.add(name);
+            }
+            req.setContinuationToken(result.getNextContinuationToken());
+        }
+        while (result.isTruncated());
+
+        return files;
+    }
+
+    /**
      * Inverse of {@link #buildPath}. Parses a canonical Mars N5 URL of the form
      * scheme://bucket.s3.host[:port]/path into server, bucket and n5Root. Returns
      * null if the URL isn't in that form (e.g. a local path or unrecognized host).
