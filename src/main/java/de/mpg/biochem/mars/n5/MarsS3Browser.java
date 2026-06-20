@@ -241,6 +241,14 @@ public class MarsS3Browser implements AutoCloseable {
         }
     }
 
+    /** True if the name is a Mars archive leaf (.yama, .yama.json, or
+     * .yama.store directory). Mirrors MoleculeArchiveIOPlugin.canOpen. */
+    public boolean isArchive(final String name) {
+        if (name == null) return false;
+        return name.endsWith(".yama") || name.endsWith(".yama.json") || name
+                .endsWith(".yama.store");
+    }
+
     /**
      * Inverse of {@link #buildPath}. Parses a canonical Mars N5 URL of the form
      * scheme://bucket.s3.host[:port]/path into server, bucket and n5Root. Returns
