@@ -283,6 +283,24 @@ public class MarsS3Browser implements AutoCloseable {
     }
 
     /**
+     * True if an object or "folder" (prefix) exists at the given path within a
+     * bucket. Used to detect overwrites before saving. The path is the key/prefix
+     * within the bucket (no leading slash).
+     */
+    public boolean exists(final String bucket, final String path) {
+        String key = path;
+        while (key.startsWith("/")) key = key.substring(1);
+        // Direct object (e.g. a .yama file)?
+        if (s3.doesObjectExist(bucket, key)) return true;
+        // Prefix / "directory" (e.g. a .yama.store)? List with the prefix and see
+        // if anything comes back.
+        final String norm = key.endsWith("/") ? key : key + "/";
+        final ListObjectsV2Request req = new ListObjectsV2Request().withBucketName(
+                bucket).withPrefix(norm).withMaxKeys(1);
+        return !s3.listObjectsV2(req).getObjectSummaries().isEmpty();
+    }
+
+    /**
      * Inverse of {@link #buildPath}. Parses a canonical Mars N5 URL of the form
      * scheme://bucket.s3.host[:port]/path into server, bucket and n5Root. Returns
      * null if the URL isn't in that form (e.g. a local path or unrecognized host).
