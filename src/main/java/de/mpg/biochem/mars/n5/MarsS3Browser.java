@@ -335,4 +335,62 @@ public class MarsS3Browser implements AutoCloseable {
             return null;
         }
     }
+
+    /** Lightweight metadata for a dataset object or prefix. */
+    public static final class MarsObjectMeta {
+        public final long sizeBytes;        // total bytes; -1 if unknown
+        public final Long lastModifiedMillis; // epoch millis of newest object, or null
+
+        public MarsObjectMeta(long sizeBytes, Long lastModifiedMillis) {
+            this.sizeBytes = sizeBytes;
+            this.lastModifiedMillis = lastModifiedMillis;
+        }
+    }
+
+    /**
+     * Fetch size and last-modified for a dataset at the given key within a bucket.
+     * Handles both cases:
+     *   - a single object (e.g. a .yama file): one HEAD request.
+     *   - a prefix / "directory" (e.g. a .yama.store or .n5): sums the sizes of all
+     *     contained objects and takes the newest last-modified.
+     * Returns null if nothing exists at the key.
+     */
+    public MarsObjectMeta getObjectMeta(final String bucket, final String key) {
+        String k = key;
+        while (k.startsWith("/")) k = k.substring(1);
+
+        // Case 1: a direct object (single-file archive like .yama / .yama.json)
+        if (s3.doesObjectExist(bucket, k)) {
+            com.amazonaws.services.s3.model.ObjectMetadata md =
+                    s3.getObjectMetadata(bucket, k);
+            return new MarsObjectMeta(
+                    md.getContentLength(),
+                    md.getLastModified() != null ? md.getLastModified().getTime() : null);
+        }
+
+        // Case 2: a prefix / directory (.yama.store, .n5) — aggregate its objects.
+        final String norm = k.endsWith("/") ? k : k + "/";
+        long totalSize = 0;
+        Long newest = null;
+        boolean found = false;
+
+        ListObjectsV2Request req = new ListObjectsV2Request()
+                .withBucketName(bucket).withPrefix(norm);
+        ListObjectsV2Result result;
+        do {
+            result = s3.listObjectsV2(req);
+            for (com.amazonaws.services.s3.model.S3ObjectSummary summary
+                    : result.getObjectSummaries()) {
+                found = true;
+                totalSize += summary.getSize();
+                long lm = summary.getLastModified() != null
+                        ? summary.getLastModified().getTime() : 0L;
+                if (newest == null || lm > newest) newest = lm;
+            }
+            req.setContinuationToken(result.getNextContinuationToken());
+        } while (result.isTruncated());
+
+        if (!found) return null;
+        return new MarsObjectMeta(totalSize, newest);
+    }
 }
