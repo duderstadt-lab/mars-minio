@@ -86,6 +86,7 @@
    		 <releaseProfiles>sign,deploy-to-scijava</releaseProfiles>
 
 		<mars-scifio.version>0.6.1</mars-scifio.version>
+		<mars-core.version>1.0.4</mars-core.version>
 	</properties>
 
 	<dependencies>
@@ -160,6 +161,11 @@
 			<groupId>de.mpg.biochem</groupId>
 			<artifactId>mars-scifio</artifactId>
 			<version>${mars-scifio.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>de.mpg.biochem</groupId>
+			<artifactId>mars-core</artifactId>
+			<version>${mars-core.version}</version>
 		</dependency>
 	</dependencies>
 
