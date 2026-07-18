@@ -39,12 +39,10 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.Iterator;
-import java.util.Optional;
 
-import com.amazonaws.client.builder.AwsClientBuilder;
 import org.janelia.saalfeldlab.googlecloud.GoogleCloudResourceManagerClient;
-import org.janelia.saalfeldlab.googlecloud.GoogleCloudStorageClient;
 import org.janelia.saalfeldlab.googlecloud.GoogleCloudStorageURI;
+import org.janelia.saalfeldlab.googlecloud.GoogleCloudUtils;
 import org.janelia.saalfeldlab.n5.N5FSReader;
 import org.janelia.saalfeldlab.n5.N5FSWriter;
 import org.janelia.saalfeldlab.n5.N5Reader;
@@ -58,14 +56,16 @@ import org.janelia.saalfeldlab.n5.s3.N5AmazonS3Writer;
 import org.janelia.saalfeldlab.n5.zarr.N5ZarrReader;
 import org.janelia.saalfeldlab.n5.zarr.N5ZarrWriter;
 
-import com.amazonaws.auth.AWSCredentials;
-import com.amazonaws.auth.AWSStaticCredentialsProvider;
-import com.amazonaws.auth.AnonymousAWSCredentials;
-import com.amazonaws.auth.DefaultAWSCredentialsProviderChain;
-import com.amazonaws.regions.Regions;
-import com.amazonaws.services.s3.AmazonS3;
-import com.amazonaws.services.s3.AmazonS3ClientBuilder;
-import com.amazonaws.services.s3.AmazonS3URI;
+import software.amazon.awssdk.auth.credentials.AnonymousCredentialsProvider;
+import software.amazon.awssdk.auth.credentials.AwsCredentials;
+import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
+import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
+import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
+import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.S3ClientBuilder;
+import software.amazon.awssdk.services.s3.S3Uri;
+import software.amazon.awssdk.services.s3.S3Utilities;
 import com.google.cloud.resourcemanager.Project;
 import com.google.cloud.resourcemanager.ResourceManager;
 import com.google.cloud.storage.Storage;
@@ -167,33 +167,16 @@ public class MarsN5Factory implements Serializable {
      * @param url
      * @return
      */
-    private static AmazonS3 createS3(final String url) {
+    private static S3Client createS3(final String url) {
 
-        AmazonS3 s3;
-        AWSCredentials credentials = null;
-        try {
-            credentials = new DefaultAWSCredentialsProviderChain().getCredentials();
-        } catch(final Exception e) {
-            System.out.println( "Could not load AWS credentials, falling back to anonymous." );
-        }
-        final AWSStaticCredentialsProvider credentialsProvider =
-                new AWSStaticCredentialsProvider(credentials == null ? new AnonymousAWSCredentials() : credentials);
+        final AwsCredentialsProvider credentialsProvider = resolveCredentialsProvider();
+        final S3Uri uri = parseS3Uri(url);
 
-        final AmazonS3URI uri = new AmazonS3URI(url);
-        final Optional<String> region = Optional.ofNullable(uri.getRegion());
+        final S3ClientBuilder builder = S3Client.builder()
+                .credentialsProvider(credentialsProvider);
+        uri.region().ifPresent(builder::region);
 
-        if(region.isPresent()) {
-            s3 = AmazonS3ClientBuilder.standard()
-                    .withCredentials(credentialsProvider)
-                    .withRegion(region.map(Regions::fromName).orElse(Regions.US_EAST_1))
-                    .build();
-        } else {
-            s3 = AmazonS3ClientBuilder.standard()
-                    .withCredentials(credentialsProvider)
-                    .build();
-        }
-
-        return s3;
+        return builder.build();
     }
 
     /**
@@ -202,25 +185,37 @@ public class MarsN5Factory implements Serializable {
      * @param endpoint
      * @return
      */
-    private static AmazonS3 createS3WithEndpoint(final String endpoint) {
-        AmazonS3 s3;
-        AWSCredentials credentials = null;
-        try {
-            credentials = new DefaultAWSCredentialsProviderChain().getCredentials();
-        } catch(final Exception e) {
-            System.out.println( "Could not load AWS credentials, falling back to anonymous." );
-        }
-        final AWSStaticCredentialsProvider credentialsProvider =
-                new AWSStaticCredentialsProvider(credentials == null ? new AnonymousAWSCredentials() : credentials);
+    private static S3Client createS3WithEndpoint(final String endpoint) {
+        final AwsCredentialsProvider credentialsProvider = resolveCredentialsProvider();
 
         //US_EAST_2 is used as a dummy region.
-        s3 = AmazonS3ClientBuilder.standard()
-                .withPathStyleAccessEnabled(true)
-                .withEndpointConfiguration(new AwsClientBuilder.EndpointConfiguration(endpoint, Regions.US_EAST_2.getName()))
-                .withCredentials(credentialsProvider)
+        return S3Client.builder()
+                .forcePathStyle(true)
+                .endpointOverride(URI.create(endpoint))
+                .region(Region.US_EAST_2)
+                .credentialsProvider(credentialsProvider)
                 .build();
+    }
 
-        return s3;
+    private static AwsCredentialsProvider resolveCredentialsProvider() {
+        try {
+            final AwsCredentials credentials = DefaultCredentialsProvider.create()
+                    .resolveCredentials();
+            return StaticCredentialsProvider.create(credentials);
+        } catch(final Exception e) {
+            System.out.println( "Could not load AWS credentials, falling back to anonymous." );
+            return AnonymousCredentialsProvider.create();
+        }
+    }
+
+    /** Parses an "s3://bucket/key" (or virtual-hosted) URL without needing a live client. */
+    private static S3Uri parseS3Uri(final String url) {
+        return S3Utilities.builder().region(Region.US_EAST_1).build().parseUri(URI.create(url));
+    }
+
+    private static String bucketOf(final S3Uri s3uri, final String url) {
+        return s3uri.bucket().orElseThrow(
+                () -> new IllegalArgumentException("No bucket specified in " + url));
     }
 
     /**
@@ -271,8 +266,7 @@ public class MarsN5Factory implements Serializable {
      */
     public N5GoogleCloudStorageReader openGoogleCloudReader(final String url) {
 
-        final GoogleCloudStorageClient storageClient = new GoogleCloudStorageClient();
-        final Storage storage = storageClient.create();
+        final Storage storage = GoogleCloudUtils.createGoogleCloudStorage(null);
         final GoogleCloudStorageURI googleCloudUri = new GoogleCloudStorageURI(url);
 
         return new N5GoogleCloudStorageReader(
@@ -289,12 +283,12 @@ public class MarsN5Factory implements Serializable {
      * @return the N5AmazonS3Reader
      */
     public N5AmazonS3Reader openAWSS3Reader(final String url) {
-        AmazonS3URI s3uri = new AmazonS3URI(url);
+        S3Uri s3uri = parseS3Uri(url);
 
         return new N5AmazonS3Reader(
                 createS3(url),
-                s3uri.getBucket(),
-                s3uri.getKey(),
+                bucketOf(s3uri, url),
+                s3uri.key().orElse(""),
                 gsonBuilder);
     }
 
@@ -306,12 +300,13 @@ public class MarsN5Factory implements Serializable {
      * @return the N5AmazonS3Reader
      */
     public N5AmazonS3Reader openAWSS3ReaderWithEndpoint(final String s3Url, final String endpointUrl) {
-        AmazonS3URI s3uri = new AmazonS3URI(s3Url);
+        final S3Client s3 = createS3WithEndpoint(endpointUrl);
+        final S3Uri s3uri = s3.utilities().parseUri(URI.create(s3Url));
 
         return new N5AmazonS3Reader(
-                createS3WithEndpoint(endpointUrl),
-                s3uri.getBucket(),
-                s3uri.getKey(),
+                s3,
+                bucketOf(s3uri, s3Url),
+                s3uri.key().orElse(""),
                 gsonBuilder);
     }
 
@@ -361,17 +356,16 @@ public class MarsN5Factory implements Serializable {
      * @return the N5GoogleCloudStorageWriter
      */
     public N5GoogleCloudStorageWriter openGoogleCloudWriter(final String url) {
-        final GoogleCloudStorageClient storageClient;
-        if (googleCloudProjectId == null) {
+        String projectId = googleCloudProjectId;
+        if (projectId == null) {
             final ResourceManager resourceManager = new GoogleCloudResourceManagerClient().create();
             final Iterator<Project> projectsIterator = resourceManager.list().iterateAll().iterator();
             if (!projectsIterator.hasNext())
                 return null;
-            storageClient = new GoogleCloudStorageClient(projectsIterator.next().getProjectId());
-        } else
-            storageClient = new GoogleCloudStorageClient(googleCloudProjectId);
+            projectId = projectsIterator.next().getProjectId();
+        }
 
-        final Storage storage = storageClient.create();
+        final Storage storage = GoogleCloudUtils.createGoogleCloudStorage(projectId);
         final GoogleCloudStorageURI googleCloudUri = new GoogleCloudStorageURI(url);
         return new N5GoogleCloudStorageWriter(
                 storage,
@@ -387,12 +381,12 @@ public class MarsN5Factory implements Serializable {
      * @return the N5AmazonS3Writer
      */
     public N5AmazonS3Writer openAWSS3Writer(final String url) {
-        AmazonS3URI s3uri = new AmazonS3URI(url);
+        S3Uri s3uri = parseS3Uri(url);
 
         return new N5AmazonS3Writer(
                 createS3(url),
-                s3uri.getBucket(),
-                s3uri.getKey(),
+                bucketOf(s3uri, url),
+                s3uri.key().orElse(""),
                 gsonBuilder);
     }
 
@@ -404,12 +398,13 @@ public class MarsN5Factory implements Serializable {
      * @return the N5AmazonS3Writer
      */
     public N5AmazonS3Writer openAWSS3WriterWithEndpoint(final String s3Url, final String endpointUrl) {
-        AmazonS3URI s3uri = new AmazonS3URI(s3Url);
+        final S3Client s3 = createS3WithEndpoint(endpointUrl);
+        final S3Uri s3uri = s3.utilities().parseUri(URI.create(s3Url));
 
         return new N5AmazonS3Writer(
-                createS3WithEndpoint(endpointUrl),
-                s3uri.getBucket(),
-                s3uri.getKey(),
+                s3,
+                bucketOf(s3uri, s3Url),
+                s3uri.key().orElse(""),
                 gsonBuilder);
     }
 

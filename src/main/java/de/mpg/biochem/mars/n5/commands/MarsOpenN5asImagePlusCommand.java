@@ -40,7 +40,7 @@ import net.imglib2.img.planar.PlanarImgFactory;
 import org.apache.commons.io.IOUtils;
 import org.janelia.saalfeldlab.n5.imglib2.N5Utils;
 import org.janelia.saalfeldlab.n5.universe.metadata.N5DatasetMetadata;
-import org.janelia.saalfeldlab.n5.universe.metadata.ome.ngff.v04.OmeNgffMetadataParser;
+import org.janelia.saalfeldlab.n5.universe.metadata.ome.ngff.OmeNgffMetadataParser;
 import org.scijava.app.StatusService;
 import org.scijava.command.Command;
 import org.scijava.command.DynamicCommand;
@@ -85,14 +85,20 @@ import org.janelia.saalfeldlab.n5.universe.metadata.N5MetadataParser;
 import org.janelia.saalfeldlab.n5.universe.metadata.N5SingleScaleMetadataParser;
 import org.janelia.saalfeldlab.n5.universe.metadata.canonical.CanonicalMetadataParser;
 
-import com.amazonaws.auth.AWSCredentials;
-import com.amazonaws.auth.AWSStaticCredentialsProvider;
-import com.amazonaws.auth.AnonymousAWSCredentials;
-import com.amazonaws.auth.DefaultAWSCredentialsProviderChain;
-import com.amazonaws.regions.Regions;
-import com.amazonaws.services.s3.AmazonS3;
-import com.amazonaws.services.s3.AmazonS3ClientBuilder;
-import com.amazonaws.client.builder.AwsClientBuilder;
+import software.amazon.awssdk.auth.credentials.AnonymousCredentialsProvider;
+import software.amazon.awssdk.auth.credentials.AwsCredentials;
+import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
+import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
+import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
+import software.amazon.awssdk.core.ResponseInputStream;
+import software.amazon.awssdk.core.sync.RequestBody;
+import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.services.s3.model.GetObjectResponse;
+import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
+import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
+import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 
 import net.imglib2.loops.LoopBuilder;
 import net.imglib2.util.Util;
@@ -101,7 +107,6 @@ import org.scijava.ui.UIService;
 import io.scif.Metadata;
 import de.mpg.biochem.mars.scifio.MarsMicromanagerFormat;
 
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
 import java.io.IOException;
@@ -123,24 +128,10 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.stream.Collectors;
 
-import com.amazonaws.services.s3.AmazonS3URI;
 import org.janelia.saalfeldlab.n5.KeyValueAccess;
 import org.janelia.saalfeldlab.n5.LockedChannel;
 import org.janelia.saalfeldlab.n5.N5Exception;
 import org.janelia.saalfeldlab.n5.N5URI;
-
-import com.amazonaws.services.s3.AmazonS3;
-import com.amazonaws.services.s3.model.CreateBucketRequest;
-import com.amazonaws.services.s3.model.DeleteObjectsRequest;
-import com.amazonaws.services.s3.model.GetObjectMetadataRequest;
-import com.amazonaws.services.s3.model.ListObjectsV2Request;
-import com.amazonaws.services.s3.model.ListObjectsV2Result;
-import com.amazonaws.services.s3.model.ObjectListing;
-import com.amazonaws.services.s3.model.ObjectMetadata;
-import com.amazonaws.services.s3.model.Region;
-import com.amazonaws.services.s3.model.S3ObjectInputStream;
-import com.amazonaws.services.s3.model.S3ObjectSummary;
-import com.amazonaws.services.s3.waiters.HeadObjectFunction;
 
 @Plugin(type = Command.class, label = "Open N5 as ImagePlus", menu = { @Menu(
         label = MenuConstants.PLUGINS_LABEL, weight = MenuConstants.PLUGINS_WEIGHT,
@@ -282,23 +273,24 @@ public class MarsOpenN5asImagePlusCommand extends DynamicCommand implements Comm
             String endpointUrl = uri.getScheme() + "://" + parts[2] + ":" + uri.getPort();
             String key = path + datasetPath + "/metadata.txt";
 
-            AWSCredentials credentials = null;
+            AwsCredentialsProvider credentialsProvider;
             try {
-                credentials = new DefaultAWSCredentialsProviderChain().getCredentials();
+                final AwsCredentials credentials = DefaultCredentialsProvider.create().resolveCredentials();
+                credentialsProvider = StaticCredentialsProvider.create(credentials);
             } catch(final Exception e) {
                 System.out.println( "Could not load AWS credentials, falling back to anonymous." );
+                credentialsProvider = AnonymousCredentialsProvider.create();
             }
-            final AWSStaticCredentialsProvider credentialsProvider =
-                    new AWSStaticCredentialsProvider(credentials == null ? new AnonymousAWSCredentials() : credentials);
 
             //US_EAST_2 is used as a dummy region.
-            AmazonS3 s3 = AmazonS3ClientBuilder.standard()
-                    .withPathStyleAccessEnabled(true)
-                    .withEndpointConfiguration(new AwsClientBuilder.EndpointConfiguration(endpointUrl, Regions.US_EAST_2.getName()))
-                    .withCredentials(credentialsProvider)
+            S3Client s3 = S3Client.builder()
+                    .forcePathStyle(true)
+                    .endpointOverride(URI.create(endpointUrl))
+                    .region(Region.US_EAST_2)
+                    .credentialsProvider(credentialsProvider)
                     .build();
 
-            if (s3.doesObjectExist(bucketName, key))
+            if (objectExists(s3, bucketName, key))
                 return new LocalS3ObjectChannel(s3, bucketName, key,true).newInputStream();
             else return null;
 
@@ -307,15 +299,24 @@ public class MarsOpenN5asImagePlusCommand extends DynamicCommand implements Comm
         }
     }
 
+    private static boolean objectExists(final S3Client s3, final String bucket, final String key) {
+        try {
+            s3.headObject(HeadObjectRequest.builder().bucket(bucket).key(key).build());
+            return true;
+        } catch (final NoSuchKeyException e) {
+            return false;
+        }
+    }
+
     private static class LocalS3ObjectChannel implements LockedChannel {
 
         private final String bucketName;
-        private final AmazonS3 s3;
+        private final S3Client s3;
         protected final String path;
         final boolean readOnly;
         private final ArrayList<Closeable> resources = new ArrayList<>();
 
-        protected LocalS3ObjectChannel(final AmazonS3 s3, final String bucketName, final String path, final boolean readOnly) {
+        protected LocalS3ObjectChannel(final S3Client s3, final String bucketName, final String path, final boolean readOnly) {
             this.s3 = s3;
             this.bucketName = bucketName;
             this.path = path;
@@ -332,12 +333,12 @@ public class MarsOpenN5asImagePlusCommand extends DynamicCommand implements Comm
         @Override
         public InputStream newInputStream() {
 
-            final S3ObjectInputStream in = s3.getObject(bucketName, path).getObjectContent();
-            final S3ObjectInputStreamDrain s3in = new S3ObjectInputStreamDrain(in);
+            final ResponseInputStream<GetObjectResponse> in = s3.getObject(
+                    GetObjectRequest.builder().bucket(bucketName).key(path).build());
             synchronized (resources) {
-                resources.add(s3in);
+                resources.add(in);
             }
-            return s3in;
+            return in;
         }
 
         @Override
@@ -362,7 +363,7 @@ public class MarsOpenN5asImagePlusCommand extends DynamicCommand implements Comm
         }
 
         @Override
-        public Writer newWriter() throws IOException {
+        public Writer newWriter() {
 
             checkWritable();
             final OutputStreamWriter writer = new OutputStreamWriter(newOutputStream(), StandardCharsets.UTF_8);
@@ -405,78 +406,11 @@ public class MarsOpenN5asImagePlusCommand extends DynamicCommand implements Comm
                 if (!closed) {
                     closed = true;
                     final byte[] bytes = buf.toByteArray();
-                    final ObjectMetadata objectMetadata = new ObjectMetadata();
-                    objectMetadata.setContentLength(bytes.length);
-                    try (final InputStream data = new ByteArrayInputStream(bytes)) {
-                        s3.putObject(bucketName, path, data, objectMetadata);
-                    }
+                    s3.putObject(
+                            PutObjectRequest.builder().bucket(bucketName).key(path).build(),
+                            RequestBody.fromBytes(bytes));
                     buf.close();
                 }
-            }
-        }
-    }
-
-    private static class S3ObjectInputStreamDrain extends InputStream {
-
-        private final S3ObjectInputStream in;
-        private boolean closed;
-
-        public S3ObjectInputStreamDrain(final S3ObjectInputStream in) {
-
-            this.in = in;
-        }
-
-        @Override
-        public int read() throws IOException {
-
-            return in.read();
-        }
-
-        @Override
-        public int read(final byte[] b, final int off, final int len) throws IOException {
-
-            return in.read(b, off, len);
-        }
-
-        @Override
-        public boolean markSupported() {
-
-            return in.markSupported();
-        }
-
-        @Override
-        public void mark(final int readlimit) {
-
-            in.mark(readlimit);
-        }
-
-        @Override
-        public void reset() throws IOException {
-
-            in.reset();
-        }
-
-        @Override
-        public int available() throws IOException {
-
-            return in.available();
-        }
-
-        @Override
-        public long skip(final long n) throws IOException {
-
-            return in.skip(n);
-        }
-
-        @Override
-        public void close() throws IOException {
-
-            if (!closed) {
-                do {
-                    in.skip(in.available());
-                } while (read() != -1);
-                in.close();
-                closed = true;
             }
         }
     }

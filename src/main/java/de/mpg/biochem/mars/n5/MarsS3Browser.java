@@ -36,17 +36,21 @@ import java.util.List;
 import org.janelia.saalfeldlab.n5.DatasetAttributes;
 import org.janelia.saalfeldlab.n5.N5Reader;
 
-import com.amazonaws.auth.AWSCredentials;
-import com.amazonaws.auth.AWSStaticCredentialsProvider;
-import com.amazonaws.auth.AnonymousAWSCredentials;
-import com.amazonaws.auth.DefaultAWSCredentialsProviderChain;
-import com.amazonaws.client.builder.AwsClientBuilder;
-import com.amazonaws.regions.Regions;
-import com.amazonaws.services.s3.AmazonS3;
-import com.amazonaws.services.s3.AmazonS3ClientBuilder;
-import com.amazonaws.services.s3.model.Bucket;
-import com.amazonaws.services.s3.model.ListObjectsV2Request;
-import com.amazonaws.services.s3.model.ListObjectsV2Result;
+import software.amazon.awssdk.auth.credentials.AnonymousCredentialsProvider;
+import software.amazon.awssdk.auth.credentials.AwsCredentials;
+import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
+import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
+import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
+import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.Bucket;
+import software.amazon.awssdk.services.s3.model.CommonPrefix;
+import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
+import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
+import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
+import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
+import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
+import software.amazon.awssdk.services.s3.model.S3Object;
 
 /**
  * Focused S3/MinIO browser for the Mars use case: enumerate buckets, list
@@ -62,7 +66,7 @@ import com.amazonaws.services.s3.model.ListObjectsV2Result;
 public class MarsS3Browser implements AutoCloseable {
 
     private final String serverUrl; // e.g. https://minio.sdmm.nat.tum.de:9000/
-    private final AmazonS3 s3;
+    private final S3Client s3;
 
     public MarsS3Browser(final String serverUrl) {
         this.serverUrl = normalizeServer(serverUrl);
@@ -76,8 +80,8 @@ public class MarsS3Browser implements AutoCloseable {
      */
     public List<String> listBuckets() {
         final List<String> names = new ArrayList<>();
-        for (Bucket b : s3.listBuckets())
-            names.add(b.getName());
+        for (Bucket b : s3.listBuckets().buckets())
+            names.add(b.name());
         return names;
     }
 
@@ -92,20 +96,20 @@ public class MarsS3Browser implements AutoCloseable {
                 .endsWith("/") ? prefix : prefix + "/");
 
         final List<String> folders = new ArrayList<>();
-        ListObjectsV2Request req = new ListObjectsV2Request().withBucketName(
-                bucket).withPrefix(norm).withDelimiter("/");
-
-        ListObjectsV2Result result;
+        String continuationToken = null;
+        ListObjectsV2Response result;
         do {
-            result = s3.listObjectsV2(req);
-            for (String cp : result.getCommonPrefixes()) {
+            result = s3.listObjectsV2(ListObjectsV2Request.builder()
+                    .bucket(bucket).prefix(norm).delimiter("/")
+                    .continuationToken(continuationToken).build());
+            for (CommonPrefix cp : result.commonPrefixes()) {
                 // cp looks like "23042025/" or "parent/child/"; take last segment.
-                String trimmed = cp.endsWith("/") ? cp.substring(0, cp.length() - 1)
-                        : cp;
+                String trimmed = cp.prefix().endsWith("/") ? cp.prefix().substring(0,
+                        cp.prefix().length() - 1) : cp.prefix();
                 int slash = trimmed.lastIndexOf('/');
                 folders.add(slash >= 0 ? trimmed.substring(slash + 1) : trimmed);
             }
-            req.setContinuationToken(result.getNextContinuationToken());
+            continuationToken = result.nextContinuationToken();
         }
         while (result.isTruncated());
 
@@ -175,7 +179,7 @@ public class MarsS3Browser implements AutoCloseable {
     @Override
     public void close() {
         try {
-            s3.shutdown();
+            s3.close();
         }
         catch (Exception e) {
             // ignore
@@ -196,18 +200,8 @@ public class MarsS3Browser implements AutoCloseable {
      * MarsN5Factory.createS3WithEndpoint; US_EAST_2 is a dummy region required by
      * the builder. Falls back to anonymous credentials if none are configured.
      */
-    private static AmazonS3 buildClient(final String serverUrl) {
-        AWSCredentials credentials = null;
-        try {
-            credentials = new DefaultAWSCredentialsProviderChain().getCredentials();
-        }
-        catch (final Exception e) {
-            System.out.println(
-                    "Could not load AWS credentials, falling back to anonymous.");
-        }
-        final AWSStaticCredentialsProvider credentialsProvider =
-                new AWSStaticCredentialsProvider(credentials == null
-                        ? new AnonymousAWSCredentials() : credentials);
+    private static S3Client buildClient(final String serverUrl) {
+        final AwsCredentialsProvider credentialsProvider = resolveCredentialsProvider();
 
         // Endpoint is scheme://host:port (strip any path).
         String endpoint = serverUrl;
@@ -222,10 +216,24 @@ public class MarsS3Browser implements AutoCloseable {
             // use as-is
         }
 
-        return AmazonS3ClientBuilder.standard().withPathStyleAccessEnabled(true)
-                .withEndpointConfiguration(new AwsClientBuilder.EndpointConfiguration(
-                        endpoint, Regions.US_EAST_2.getName())).withCredentials(
-                        credentialsProvider).build();
+        // US_EAST_2 is used as a dummy region.
+        return S3Client.builder().forcePathStyle(true)
+                .endpointOverride(URI.create(endpoint))
+                .region(Region.US_EAST_2)
+                .credentialsProvider(credentialsProvider).build();
+    }
+
+    private static AwsCredentialsProvider resolveCredentialsProvider() {
+        try {
+            final AwsCredentials credentials = DefaultCredentialsProvider.create()
+                    .resolveCredentials();
+            return StaticCredentialsProvider.create(credentials);
+        }
+        catch (final Exception e) {
+            System.out.println(
+                    "Could not load AWS credentials, falling back to anonymous.");
+            return AnonymousCredentialsProvider.create();
+        }
     }
 
     /** Parsed components of a canonical Mars N5 URL. */
@@ -259,23 +267,22 @@ public class MarsS3Browser implements AutoCloseable {
                 .endsWith("/") ? prefix : prefix + "/");
 
         final List<String> files = new ArrayList<>();
-        ListObjectsV2Request req = new ListObjectsV2Request().withBucketName(bucket)
-                .withPrefix(norm).withDelimiter("/");
-
-        ListObjectsV2Result result;
+        String continuationToken = null;
+        ListObjectsV2Response result;
         do {
-            result = s3.listObjectsV2(req);
-            for (com.amazonaws.services.s3.model.S3ObjectSummary summary : result
-                    .getObjectSummaries())
+            result = s3.listObjectsV2(ListObjectsV2Request.builder()
+                    .bucket(bucket).prefix(norm).delimiter("/")
+                    .continuationToken(continuationToken).build());
+            for (S3Object summary : result.contents())
             {
-                String key = summary.getKey();
+                String key = summary.key();
                 // Skip the prefix itself (folder marker) and anything not at this level.
                 if (key.equals(norm)) continue;
                 String name = key.substring(norm.length());
                 if (name.isEmpty() || name.contains("/")) continue; // deeper level
                 files.add(name);
             }
-            req.setContinuationToken(result.getNextContinuationToken());
+            continuationToken = result.nextContinuationToken();
         }
         while (result.isTruncated());
 
@@ -291,13 +298,24 @@ public class MarsS3Browser implements AutoCloseable {
         String key = path;
         while (key.startsWith("/")) key = key.substring(1);
         // Direct object (e.g. a .yama file)?
-        if (s3.doesObjectExist(bucket, key)) return true;
+        if (objectExists(bucket, key)) return true;
         // Prefix / "directory" (e.g. a .yama.store)? List with the prefix and see
         // if anything comes back.
         final String norm = key.endsWith("/") ? key : key + "/";
-        final ListObjectsV2Request req = new ListObjectsV2Request().withBucketName(
-                bucket).withPrefix(norm).withMaxKeys(1);
-        return !s3.listObjectsV2(req).getObjectSummaries().isEmpty();
+        final ListObjectsV2Request req = ListObjectsV2Request.builder()
+                .bucket(bucket).prefix(norm).maxKeys(1).build();
+        return !s3.listObjectsV2(req).contents().isEmpty();
+    }
+
+    /** True if a single object exists at the exact key (not a prefix). */
+    private boolean objectExists(final String bucket, final String key) {
+        try {
+            s3.headObject(HeadObjectRequest.builder().bucket(bucket).key(key).build());
+            return true;
+        }
+        catch (final NoSuchKeyException e) {
+            return false;
+        }
     }
 
     /**
@@ -360,12 +378,12 @@ public class MarsS3Browser implements AutoCloseable {
         while (k.startsWith("/")) k = k.substring(1);
 
         // Case 1: a direct object (single-file archive like .yama / .yama.json)
-        if (s3.doesObjectExist(bucket, k)) {
-            com.amazonaws.services.s3.model.ObjectMetadata md =
-                    s3.getObjectMetadata(bucket, k);
+        if (objectExists(bucket, k)) {
+            HeadObjectResponse md =
+                    s3.headObject(HeadObjectRequest.builder().bucket(bucket).key(k).build());
             return new MarsObjectMeta(
-                    md.getContentLength(),
-                    md.getLastModified() != null ? md.getLastModified().getTime() : null);
+                    md.contentLength(),
+                    md.lastModified() != null ? md.lastModified().toEpochMilli() : null);
         }
 
         // Case 2: a prefix / directory (.yama.store, .n5) — aggregate its objects.
@@ -374,20 +392,19 @@ public class MarsS3Browser implements AutoCloseable {
         Long newest = null;
         boolean found = false;
 
-        ListObjectsV2Request req = new ListObjectsV2Request()
-                .withBucketName(bucket).withPrefix(norm);
-        ListObjectsV2Result result;
+        String continuationToken = null;
+        ListObjectsV2Response result;
         do {
-            result = s3.listObjectsV2(req);
-            for (com.amazonaws.services.s3.model.S3ObjectSummary summary
-                    : result.getObjectSummaries()) {
+            result = s3.listObjectsV2(ListObjectsV2Request.builder()
+                    .bucket(bucket).prefix(norm).continuationToken(continuationToken).build());
+            for (S3Object summary : result.contents()) {
                 found = true;
-                totalSize += summary.getSize();
-                long lm = summary.getLastModified() != null
-                        ? summary.getLastModified().getTime() : 0L;
+                totalSize += summary.size();
+                long lm = summary.lastModified() != null
+                        ? summary.lastModified().toEpochMilli() : 0L;
                 if (newest == null || lm > newest) newest = lm;
             }
-            req.setContinuationToken(result.getNextContinuationToken());
+            continuationToken = result.nextContinuationToken();
         } while (result.isTruncated());
 
         if (!found) return null;
