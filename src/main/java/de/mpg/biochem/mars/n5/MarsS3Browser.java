@@ -120,6 +120,57 @@ public class MarsS3Browser implements AutoCloseable {
         return name != null && name.endsWith(".n5");
     }
 
+    /** Combined result of {@link #listChildren}: immediate child folders and files under a prefix. */
+    public static final class Children {
+        public final List<String> folders;
+        public final List<String> files;
+        public Children(final List<String> folders, final List<String> files) {
+            this.folders = folders;
+            this.files = files;
+        }
+    }
+
+    /**
+     * List immediate child folders AND files under the given prefix in a single
+     * paginated {@code ListObjectsV2} loop. {@link #listFolders} and
+     * {@link #listFiles} each issue their own identical (same bucket/prefix/
+     * delimiter) request; a caller that needs both at every prefix of a tree walk
+     * — e.g. the Dataset Explorer's bucket indexer — pays for two round trips per
+     * node where one suffices, since a single response already carries both
+     * {@code commonPrefixes()} (folders) and {@code contents()} (files).
+     */
+    public Children listChildren(final String bucket, final String prefix) {
+        final String norm = (prefix == null || prefix.isEmpty()) ? "" : (prefix
+                .endsWith("/") ? prefix : prefix + "/");
+
+        final List<String> folders = new ArrayList<>();
+        final List<String> files = new ArrayList<>();
+        String continuationToken = null;
+        ListObjectsV2Response result;
+        do {
+            result = s3.listObjectsV2(ListObjectsV2Request.builder()
+                    .bucket(bucket).prefix(norm).delimiter("/")
+                    .continuationToken(continuationToken).build());
+            for (CommonPrefix cp : result.commonPrefixes()) {
+                String trimmed = cp.prefix().endsWith("/") ? cp.prefix().substring(0,
+                        cp.prefix().length() - 1) : cp.prefix();
+                int slash = trimmed.lastIndexOf('/');
+                folders.add(slash >= 0 ? trimmed.substring(slash + 1) : trimmed);
+            }
+            for (S3Object summary : result.contents()) {
+                String key = summary.key();
+                if (key.equals(norm)) continue;
+                String name = key.substring(norm.length());
+                if (name.isEmpty() || name.contains("/")) continue;
+                files.add(name);
+            }
+            continuationToken = result.nextContinuationToken();
+        }
+        while (result.isTruncated());
+
+        return new Children(folders, files);
+    }
+
     /**
      * List the datasets (top-level groups carrying array attributes) inside an
      * .n5 root. Works for any root URL the Mars reader understands (S3 or
@@ -217,9 +268,20 @@ public class MarsS3Browser implements AutoCloseable {
         }
 
         // US_EAST_2 is used as a dummy region.
+        //
+        // maxConnections: the SDK's default sync HTTP client (Apache5HttpClient)
+        // caps its connection pool at 50 unless told otherwise. Callers that fan
+        // requests out across a larger thread pool (e.g. the Dataset Explorer's
+        // bucket-tree walk, which parallelizes listChildren calls) will have
+        // extra threads queue for a free connection once concurrency exceeds
+        // that default, silently capping real throughput well below what the
+        // thread pool suggests. Raised here so the connection pool isn't the
+        // hidden ceiling under the caller's own concurrency limit.
         return S3Client.builder().forcePathStyle(true)
                 .endpointOverride(URI.create(endpoint))
                 .region(Region.US_EAST_2)
+                .httpClientBuilder(software.amazon.awssdk.http.apache5.Apache5HttpClient.builder()
+                        .maxConnections(200))
                 .credentialsProvider(credentialsProvider).build();
     }
 

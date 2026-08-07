@@ -159,6 +159,11 @@
 			<groupId>software.amazon.awssdk</groupId>
 			<artifactId>s3</artifactId>
 		</dependency>
+		<dependency>
+			<groupId>software.amazon.awssdk</groupId>
+			<artifactId>apache5-client</artifactId>
+			<version>2.46.15</version>
+		</dependency>
 
 		<!-- Mars dependencies -->
 		<dependency>
