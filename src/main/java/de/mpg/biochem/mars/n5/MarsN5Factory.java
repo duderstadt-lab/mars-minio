@@ -173,7 +173,9 @@ public class MarsN5Factory implements Serializable {
         final S3Uri uri = parseS3Uri(url);
 
         final S3ClientBuilder builder = S3Client.builder()
-                .credentialsProvider(credentialsProvider);
+                .credentialsProvider(credentialsProvider)
+                .httpClientBuilder(software.amazon.awssdk.http.apache5.Apache5HttpClient.builder()
+                        .maxConnections(200));
         uri.region().ifPresent(builder::region);
 
         return builder.build();
@@ -189,10 +191,20 @@ public class MarsN5Factory implements Serializable {
         final AwsCredentialsProvider credentialsProvider = resolveCredentialsProvider();
 
         //US_EAST_2 is used as a dummy region.
+        //
+        // maxConnections: the SDK's default sync HTTP client (Apache5HttpClient)
+        // caps its connection pool at 50 unless told otherwise. BDV's SharedQueue
+        // fetcher threads (see MarsBdvFrame) fan chunk-fetch requests out across
+        // this client while scrubbing an N5/Zarr volume; once fetcher concurrency
+        // exceeds the default, extra threads queue for a free connection,
+        // silently capping real throughput below what the fetcher pool suggests
+        // (same issue found and fixed for MarsS3Browser's bucket-tree walk).
         return S3Client.builder()
                 .forcePathStyle(true)
                 .endpointOverride(URI.create(endpoint))
                 .region(Region.US_EAST_2)
+                .httpClientBuilder(software.amazon.awssdk.http.apache5.Apache5HttpClient.builder()
+                        .maxConnections(200))
                 .credentialsProvider(credentialsProvider)
                 .build();
     }
