@@ -45,6 +45,7 @@ import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.Bucket;
 import software.amazon.awssdk.services.s3.model.CommonPrefix;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
@@ -172,28 +173,146 @@ public class MarsS3Browser implements AutoCloseable {
     }
 
     /**
-     * List the datasets (top-level groups carrying array attributes) inside an
-     * .n5 root. Works for any root URL the Mars reader understands (S3 or
-     * local). Each entry carries dimensions, dtype and computed size.
+     * How many group levels below the .n5 root are searched for datasets. Mars
+     * writes one dataset per position at the top level ("Pos0"), but older
+     * containers nest them ("dataset1/DNA"), and other writers nest deeper
+     * still. This only bounds a pathological tree — the walk normally stops far
+     * sooner, as soon as it reaches the datasets themselves.
+     */
+    private static final int MAX_DATASET_DEPTH = 6;
+
+    /**
+     * Ceiling on groups examined during one walk. A dataset group whose
+     * attributes can't be read (a transient error, say) would otherwise be
+     * treated as an ordinary group and descended into — and its children are
+     * the chunk directories, of which there may be thousands. This caps the
+     * request storm that would follow.
+     */
+    private static final int MAX_GROUPS_VISITED = 2000;
+
+    /** The name given to a dataset that sits at the .n5 root itself. */
+    public static final String ROOT_DATASET = "/";
+
+    /**
+     * List the datasets inside an .n5 root. Works for any root URL the Mars
+     * reader understands (S3 or local). Each entry carries dimensions, dtype and
+     * computed size.
+     * <p>
+     * The search is recursive: a group carrying array attributes is a dataset
+     * and is reported (named by its path relative to the root, e.g. "Pos0" or
+     * "dataset1/DNA"); anything else is descended into. Datasets are never
+     * descended into, since N5 reports a dataset's chunk directories ("0", "1",
+     * …) as ordinary child groups and walking them would be both meaningless and
+     * very slow.
      */
     public static List<DatasetEntry> listDatasets(final String n5RootUrl) {
         final List<DatasetEntry> entries = new ArrayList<>();
         final N5Reader reader = new MarsN5ViewerReaderFun().apply(n5RootUrl);
         if (reader == null) return entries;
 
-        final String[] groups = reader.list("/");
-        if (groups == null) return entries;
-
-        for (String group : groups) {
+        try {
+            collectDatasets(reader, "", entries, MAX_DATASET_DEPTH, new int[] { 0 });
+        }
+        finally {
             try {
-                final DatasetAttributes attrs = reader.getDatasetAttributes(group);
-                if (attrs != null) entries.add(new DatasetEntry(group, attrs));
+                reader.close();
             }
-            catch (Exception e) {
-                // Not a dataset (or unreadable) — skip it.
+            catch (final Exception e) {
+                // ignore
             }
         }
+
+        entries.sort((a, b) -> compareNatural(a.getName(), b.getName()));
         return entries;
+    }
+
+    /**
+     * Depth-first search for dataset groups. {@code group} is the path relative
+     * to the root ("" at the root itself); {@code budget} is a single-element
+     * counter shared across the walk (see {@link #MAX_GROUPS_VISITED}).
+     */
+    private static void collectDatasets(final N5Reader reader,
+                                        final String group, final List<DatasetEntry> out,
+                                        final int depthRemaining, final int[] budget)
+    {
+        if (budget[0]++ >= MAX_GROUPS_VISITED) return;
+
+        final String path = group.isEmpty() ? "/" : group;
+
+        final DatasetAttributes attrs = datasetAttributesOrNull(reader, path);
+        if (attrs != null) {
+            out.add(new DatasetEntry(group.isEmpty() ? ROOT_DATASET : group, attrs));
+            return; // it's a dataset — its children are chunks, not groups
+        }
+
+        if (depthRemaining <= 0) return;
+
+        final String[] children = childGroupsOrNull(reader, path);
+        if (children == null) return;
+
+        for (final String child : children) {
+            collectDatasets(reader, group.isEmpty() ? child : group + "/" + child,
+                    out, depthRemaining - 1, budget);
+        }
+    }
+
+    private static DatasetAttributes datasetAttributesOrNull(final N5Reader reader,
+                                                             final String path)
+    {
+        try {
+            return reader.getDatasetAttributes(path);
+        }
+        catch (final Exception e) {
+            // Not a dataset, or its attributes are unreadable.
+            return null;
+        }
+    }
+
+    private static String[] childGroupsOrNull(final N5Reader reader,
+                                              final String path)
+    {
+        try {
+            return reader.list(path);
+        }
+        catch (final Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Compare names so embedded numbers order numerically — "Pos2" before
+     * "Pos10", not after it. Positions routinely run past nine.
+     */
+    static int compareNatural(final String a, final String b) {
+        int i = 0, j = 0;
+        while (i < a.length() && j < b.length()) {
+            final char ca = a.charAt(i);
+            final char cb = b.charAt(j);
+            if (Character.isDigit(ca) && Character.isDigit(cb)) {
+                int endA = i;
+                while (endA < a.length() && Character.isDigit(a.charAt(endA)))
+                    endA++;
+                int endB = j;
+                while (endB < b.length() && Character.isDigit(b.charAt(endB)))
+                    endB++;
+                // Compare digit runs by value: strip leading zeros, then length,
+                // then lexicographically (equal-length digit strings compare the
+                // same either way).
+                final String da = a.substring(i, endA).replaceFirst("^0+(?=.)", "");
+                final String db = b.substring(j, endB).replaceFirst("^0+(?=.)", "");
+                if (da.length() != db.length()) return da.length() - db.length();
+                final int cmp = da.compareTo(db);
+                if (cmp != 0) return cmp;
+                i = endA;
+                j = endB;
+            }
+            else {
+                if (ca != cb) return ca - cb;
+                i++;
+                j++;
+            }
+        }
+        return (a.length() - i) - (b.length() - j);
     }
 
     /**
@@ -367,6 +486,22 @@ public class MarsS3Browser implements AutoCloseable {
         final ListObjectsV2Request req = ListObjectsV2Request.builder()
                 .bucket(bucket).prefix(norm).maxKeys(1).build();
         return !s3.listObjectsV2(req).contents().isEmpty();
+    }
+
+    /**
+     * Fetch the full contents of a single object, or null if there is no object
+     * at that exact key. Intended for the small sidecar files Mars keeps beside
+     * its data (e.g. a dataset's {@code metadata.txt}) — it buffers the whole
+     * object in memory, so don't point it at image chunks.
+     */
+    public byte[] getObjectBytes(final String bucket, final String key) {
+        try {
+            return s3.getObjectAsBytes(GetObjectRequest.builder().bucket(bucket)
+                    .key(key).build()).asByteArray();
+        }
+        catch (final NoSuchKeyException e) {
+            return null;
+        }
     }
 
     /** True if a single object exists at the exact key (not a prefix). */
