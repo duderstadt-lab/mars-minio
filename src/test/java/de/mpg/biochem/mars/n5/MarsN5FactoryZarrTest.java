@@ -42,7 +42,9 @@ import org.janelia.saalfeldlab.n5.N5Writer;
 import org.janelia.saalfeldlab.n5.zarr.N5ZarrWriter;
 import org.janelia.saalfeldlab.n5.zarr.v3.ZarrV3KeyValueReader;
 import org.janelia.saalfeldlab.n5.zarr.v3.ZarrV3KeyValueWriter;
+import org.janelia.saalfeldlab.n5.zarr.v3.ZarrV3DatasetAttributes;
 import org.junit.jupiter.api.Test;
+
 import org.junit.jupiter.api.io.TempDir;
 
 import com.google.gson.GsonBuilder;
@@ -83,5 +85,22 @@ public class MarsN5FactoryZarrTest {
         final N5Reader r = new MarsN5Factory().openReader(root);
         assertFalse(r instanceof ZarrV3KeyValueReader);
         assertArrayEquals(new long[] {20, 20}, r.getDatasetAttributes("ds").getDimensions());
+    }
+
+    @Test
+    void localShardedZarrV3Attributes(@TempDir final Path dir) throws Exception {
+        final String root = dir.resolve("sharded.zarr").toString();
+        try (final N5Writer w = new ZarrV3KeyValueWriter(new FileSystemKeyValueAccess(), root,
+                new GsonBuilder(), true)) {
+            final DatasetAttributes sharded = new ZarrV3DatasetAttributes.Builder(
+                    new long[] {40, 40}, DataType.UINT16).blockSize(new int[] {20, 20})
+                            .chunkSize(new int[] {10, 10}).build();
+            w.createDataset("ds", sharded);
+        }
+        final N5Reader r = new MarsN5Factory().openReader(root);
+        final DatasetAttributes attrs = r.getDatasetAttributes("ds");
+        assertTrue(attrs.isSharded());
+        assertArrayEquals(new int[] {20, 20}, attrs.getBlockSize());
+        assertArrayEquals(new int[] {10, 10}, attrs.getChunkSize());
     }
 }
