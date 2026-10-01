@@ -43,7 +43,12 @@ import org.janelia.saalfeldlab.n5.zarr.N5ZarrWriter;
 import org.janelia.saalfeldlab.n5.zarr.v3.ZarrV3KeyValueReader;
 import org.janelia.saalfeldlab.n5.zarr.v3.ZarrV3KeyValueWriter;
 import org.janelia.saalfeldlab.n5.zarr.v3.ZarrV3DatasetAttributes;
+import org.janelia.saalfeldlab.n5.imglib2.N5Utils;
 import org.junit.jupiter.api.Test;
+
+import net.imglib2.RandomAccess;
+import net.imglib2.img.array.ArrayImgs;
+import net.imglib2.type.numeric.integer.UnsignedShortType;
 
 import org.junit.jupiter.api.io.TempDir;
 
@@ -102,5 +107,25 @@ public class MarsN5FactoryZarrTest {
         assertTrue(attrs.isSharded());
         assertArrayEquals(new int[] {20, 20}, attrs.getBlockSize());
         assertArrayEquals(new int[] {10, 10}, attrs.getChunkSize());
+    }
+
+    @Test
+    void localZarrV3PixelRoundTrip(@TempDir final Path dir) throws Exception {
+        final String root = dir.resolve("pixels.zarr").toString();
+        final short[] data = new short[40 * 30 * 5];
+        for (int i = 0; i < data.length; i++)
+            data[i] = (short) i;
+        try (final N5Writer w = new ZarrV3KeyValueWriter(new FileSystemKeyValueAccess(), root,
+                new GsonBuilder(), true)) {
+            N5Utils.save(ArrayImgs.unsignedShorts(data, 40, 30, 5), w, "ds",
+                    new int[] {16, 16, 2}, new GzipCompression(),
+                    java.util.concurrent.Executors.newFixedThreadPool(4));
+        }
+        final N5Reader r = new MarsN5Factory().openReader(root);
+        assertArrayEquals(new long[] {40, 30, 5}, r.getDatasetAttributes("ds").getDimensions());
+        final RandomAccess<UnsignedShortType> ra = N5Utils.<UnsignedShortType>open(r, "ds")
+                .randomAccess();
+        ra.setPosition(new long[] {7, 11, 3});
+        assertEquals(data[7 + 40 * (11 + 30 * 3)] & 0xffff, ra.get().get());
     }
 }
