@@ -55,7 +55,7 @@ import software.amazon.awssdk.services.s3.model.S3Object;
 
 /**
  * Focused S3/MinIO browser for the Mars use case: enumerate buckets, list
- * folder-level prefixes, list datasets inside an .n5 container, and assemble
+ * folder-level prefixes, list datasets inside an N5 or Zarr container, and assemble
  * the canonical Mars N5 URL.
  * <p>
  * Listing buckets and folders uses the AWS S3 client directly (folder-level
@@ -117,8 +117,14 @@ public class MarsS3Browser implements AutoCloseable {
         return folders;
     }
 
+    /** True if the name is an N5-API container (N5 or Zarr): ends in .n5 or .zarr, case-insensitive. */
     public boolean isN5(final String name) {
-        return name != null && name.endsWith(".n5");
+        return MarsN5Factory.isContainerName(name);
+    }
+
+    /** Alias of {@link #isN5(String)}. */
+    public boolean isContainer(final String name) {
+        return isN5(name);
     }
 
     /** Combined result of {@link #listChildren}: immediate child folders and files under a prefix. */
@@ -173,7 +179,7 @@ public class MarsS3Browser implements AutoCloseable {
     }
 
     /**
-     * How many group levels below the .n5 root are searched for datasets. Mars
+     * How many group levels below the container root are searched for datasets. Mars
      * writes one dataset per position at the top level ("Pos0"), but older
      * containers nest them ("dataset1/DNA"), and other writers nest deeper
      * still. This only bounds a pathological tree — the walk normally stops far
@@ -190,11 +196,11 @@ public class MarsS3Browser implements AutoCloseable {
      */
     private static final int MAX_GROUPS_VISITED = 2000;
 
-    /** The name given to a dataset that sits at the .n5 root itself. */
+    /** The name given to a dataset that sits at the container root itself. */
     public static final String ROOT_DATASET = "/";
 
     /**
-     * List the datasets inside an .n5 root. Works for any root URL the Mars
+     * List the datasets inside an N5 or Zarr container root. Works for any root URL the Mars
      * reader understands (S3 or local). Each entry carries dimensions, dtype and
      * computed size.
      * <p>
@@ -317,7 +323,7 @@ public class MarsS3Browser implements AutoCloseable {
 
     /**
      * Assemble the canonical Mars N5 URL from server + bucket + the path to the
-     * .n5 root within the bucket. Produces e.g.
+     * container (.n5 or .zarr) root within the bucket. Produces e.g.
      * https://rnap2.s3.minio.sdmm.nat.tum.de:9000/23042025/...loading.n5
      */
     public static String buildPath(final String server, final String bucket,

@@ -43,6 +43,8 @@ import java.util.Iterator;
 import org.janelia.saalfeldlab.googlecloud.GoogleCloudResourceManagerClient;
 import org.janelia.saalfeldlab.googlecloud.GoogleCloudStorageURI;
 import org.janelia.saalfeldlab.googlecloud.GoogleCloudUtils;
+import org.janelia.saalfeldlab.n5.FileSystemKeyValueAccess;
+import org.janelia.saalfeldlab.n5.KeyValueAccess;
 import org.janelia.saalfeldlab.n5.N5FSReader;
 import org.janelia.saalfeldlab.n5.N5FSWriter;
 import org.janelia.saalfeldlab.n5.N5Reader;
@@ -51,10 +53,13 @@ import org.janelia.saalfeldlab.n5.googlecloud.N5GoogleCloudStorageReader;
 import org.janelia.saalfeldlab.n5.googlecloud.N5GoogleCloudStorageWriter;
 import org.janelia.saalfeldlab.n5.hdf5.N5HDF5Reader;
 import org.janelia.saalfeldlab.n5.hdf5.N5HDF5Writer;
+import org.janelia.saalfeldlab.n5.s3.AmazonS3KeyValueAccess;
 import org.janelia.saalfeldlab.n5.s3.N5AmazonS3Reader;
 import org.janelia.saalfeldlab.n5.s3.N5AmazonS3Writer;
 import org.janelia.saalfeldlab.n5.zarr.N5ZarrReader;
 import org.janelia.saalfeldlab.n5.zarr.N5ZarrWriter;
+import org.janelia.saalfeldlab.n5.zarr.ZarrKeyValueReader;
+import org.janelia.saalfeldlab.n5.zarr.v3.ZarrV3KeyValueReader;
 
 import software.amazon.awssdk.auth.credentials.AnonymousCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.AwsCredentials;
@@ -161,6 +166,61 @@ public class MarsN5Factory implements Serializable {
         return false;
     }
 
+
+    /**
+     * @param name a file or folder name (or path)
+     * @return true if the name ends in .n5 or .zarr (case-insensitive, trailing
+     *         slashes ignored), i.e. is an N5-API container root.
+     */
+    public static boolean isContainerName(final String name) {
+        return name != null && name.matches("(?i).*\\.(n5|zarr)/*");
+    }
+
+    /**
+     * @param urlOrPath the location of a container root
+     * @return true if the container root ends in .zarr (case-insensitive,
+     *         trailing slashes ignored).
+     */
+    public static boolean isZarr(final String urlOrPath) {
+        return urlOrPath != null && urlOrPath.matches("(?i).*\\.zarr/*");
+    }
+
+    /**
+     * Open a Zarr container on any key-value access. Zarr v3 (zarr.json) is
+     * preferred and Zarr v2 (.zgroup/.zarray) is the fallback.
+     *
+     * @param kva key-value access for the store
+     * @param basePath path of the container root as understood by kva
+     * @return a v3 or v2 Zarr reader
+     */
+    private N5Reader openZarrReader(final KeyValueAccess kva, final String basePath) {
+        final String root = basePath.replaceAll("/+$", "");
+        if (kva.exists(root + "/zarr.json"))
+            return new ZarrV3KeyValueReader(kva, basePath, gsonBuilder, cacheAttributes);
+        return new ZarrKeyValueReader(kva, basePath, gsonBuilder, zarrMapN5DatasetAttributes,
+                zarrMergeAttributes, cacheAttributes);
+    }
+
+    /**
+     * Open a Zarr (v3 or v2) {@link N5Reader} on S3 using the supplied client,
+     * preserving custom endpoint, path style and connection pool.
+     */
+    private N5Reader openZarrS3Reader(final S3Client s3, final String bucket, final String key) {
+        final String cleanKey = key == null ? "" : key.replaceAll("^/+", "");
+        final String base = "s3://" + bucket + "/" + cleanKey;
+        return openZarrReader(new AmazonS3KeyValueAccess(s3, URI.create(base), false), base);
+    }
+
+    /**
+     * Open a local Zarr (v3 or v2) {@link N5Reader}.
+     *
+     * @param path path to the zarr directory
+     * @return the reader
+     */
+    public N5Reader openLocalZarrReader(final String path) {
+        return openZarrReader(new FileSystemKeyValueAccess(), path);
+    }
+
     /**
      * Helper method.
      *
@@ -207,6 +267,12 @@ public class MarsN5Factory implements Serializable {
                         .maxConnections(200))
                 .credentialsProvider(credentialsProvider)
                 .build();
+    }
+
+    private static void requireNotS3Zarr(final String key) {
+        if (isZarr(key))
+            throw new UnsupportedOperationException(
+                    "Writing Zarr containers to S3 is not supported yet: " + key);
     }
 
     private static AwsCredentialsProvider resolveCredentialsProvider() {
@@ -292,10 +358,13 @@ public class MarsN5Factory implements Serializable {
      * Open an {@link N5Reader} for AWS S3.
      *
      * @param url url to the amazon s3 object
-     * @return the N5AmazonS3Reader
+     * @return the N5AmazonS3Reader, or a Zarr reader when the key ends in .zarr
      */
-    public N5AmazonS3Reader openAWSS3Reader(final String url) {
+    public N5Reader openAWSS3Reader(final String url) {
         S3Uri s3uri = parseS3Uri(url);
+
+        if (isZarr(s3uri.key().orElse("")))
+            return openZarrS3Reader(createS3(url), bucketOf(s3uri, url), s3uri.key().orElse(""));
 
         return new N5AmazonS3Reader(
                 createS3(url),
@@ -309,11 +378,14 @@ public class MarsN5Factory implements Serializable {
      *
      * @param s3Url url to the amazon s3 object
      * @param endpointUrl endpoint url for the server
-     * @return the N5AmazonS3Reader
+     * @return the N5AmazonS3Reader, or a Zarr reader when the key ends in .zarr
      */
-    public N5AmazonS3Reader openAWSS3ReaderWithEndpoint(final String s3Url, final String endpointUrl) {
+    public N5Reader openAWSS3ReaderWithEndpoint(final String s3Url, final String endpointUrl) {
         final S3Client s3 = createS3WithEndpoint(endpointUrl);
         final S3Uri s3uri = s3.utilities().parseUri(URI.create(s3Url));
+
+        if (isZarr(s3uri.key().orElse("")))
+            return openZarrS3Reader(s3, bucketOf(s3uri, s3Url), s3uri.key().orElse(""));
 
         return new N5AmazonS3Reader(
                 s3,
@@ -394,6 +466,7 @@ public class MarsN5Factory implements Serializable {
      */
     public N5AmazonS3Writer openAWSS3Writer(final String url) {
         S3Uri s3uri = parseS3Uri(url);
+        requireNotS3Zarr(s3uri.key().orElse(""));
 
         return new N5AmazonS3Writer(
                 createS3(url),
@@ -412,6 +485,7 @@ public class MarsN5Factory implements Serializable {
     public N5AmazonS3Writer openAWSS3WriterWithEndpoint(final String s3Url, final String endpointUrl) {
         final S3Client s3 = createS3WithEndpoint(endpointUrl);
         final S3Uri s3uri = s3.utilities().parseUri(URI.create(s3Url));
+        requireNotS3Zarr(s3uri.key().orElse(""));
 
         return new N5AmazonS3Writer(
                 s3,
@@ -457,7 +531,7 @@ public class MarsN5Factory implements Serializable {
         if (isHDF5Reader(url))
             return openHDF5Reader(url);
         else if (url.contains(".zarr"))
-            return openZarrReader(url);
+            return openLocalZarrReader(url);
         else
             return openFSReader(url);
     }
