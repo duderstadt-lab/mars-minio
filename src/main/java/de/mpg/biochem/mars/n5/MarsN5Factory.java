@@ -210,11 +210,11 @@ public class MarsN5Factory implements Serializable {
      */
     private N5Reader openZarrS3Reader(final S3Client s3, final String bucket, final String key) {
         final String cleanKey = key == null ? "" : key.replaceAll("^/+", "");
-        // Same convention as N5AmazonS3Reader: the key-value access is rooted at
-        // s3://bucket/key and the container base path is the bare key.
+        // The S3 key-value access only resolves full s3://bucket/key URIs, so the
+        // container base path must be the URI too (a bare key never "exists").
         final String containerUri = "s3://" + bucket + "/" + cleanKey;
         return openZarrReader(new AmazonS3KeyValueAccess(s3, URI.create(containerUri), false),
-                cleanKey);
+                containerUri);
     }
 
     /**
