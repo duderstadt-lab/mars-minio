@@ -136,6 +136,9 @@ public final class MarsZarrWriter {
         final ZarrV3DatasetAttributes attributes = new ZarrV3DatasetAttributes.Builder(
                 dims, dataType).blockSize(shard).chunkSize(chunk).compression(compression)
                         .build();
+        // Make sure the container root has its own metadata (zarr.json); the S3
+        // key-value access does not create it implicitly.
+        writer.createGroup("/");
         writer.createDataset(dataset, attributes);
 
         final long[] shardCounts = new long[n];

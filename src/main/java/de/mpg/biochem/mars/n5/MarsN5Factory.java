@@ -186,8 +186,8 @@ public class MarsN5Factory implements Serializable {
     }
 
     /**
-     * Open a Zarr container on any key-value access. Zarr v3 (zarr.json) is
-     * preferred and Zarr v2 (.zgroup/.zarray) is the fallback.
+     * Open a Zarr container on any key-value access. Zarr v2 is detected by
+     * .zgroup/.zarray at the root; anything else is opened as Zarr v3.
      *
      * @param kva key-value access for the store
      * @param basePath path of the container root as understood by kva
@@ -195,10 +195,13 @@ public class MarsN5Factory implements Serializable {
      */
     private N5Reader openZarrReader(final KeyValueAccess kva, final String basePath) {
         final String root = basePath.replaceAll("/+$", "");
-        if (kva.exists(root + "/zarr.json"))
-            return new ZarrV3KeyValueReader(kva, basePath, gsonBuilder, cacheAttributes);
-        return new ZarrKeyValueReader(kva, basePath, gsonBuilder, zarrMapN5DatasetAttributes,
-                zarrMergeAttributes, cacheAttributes);
+        // Zarr v2 always has .zgroup or .zarray at the root. Everything else is
+        // treated as v3, including containers whose root zarr.json is missing
+        // (not every writer creates it).
+        if (kva.exists(root + "/.zgroup") || kva.exists(root + "/.zarray"))
+            return new ZarrKeyValueReader(kva, basePath, gsonBuilder, zarrMapN5DatasetAttributes,
+                    zarrMergeAttributes, cacheAttributes);
+        return new ZarrV3KeyValueReader(kva, basePath, gsonBuilder, cacheAttributes);
     }
 
     /**
@@ -207,8 +210,11 @@ public class MarsN5Factory implements Serializable {
      */
     private N5Reader openZarrS3Reader(final S3Client s3, final String bucket, final String key) {
         final String cleanKey = key == null ? "" : key.replaceAll("^/+", "");
-        final String base = "s3://" + bucket + "/" + cleanKey;
-        return openZarrReader(new AmazonS3KeyValueAccess(s3, URI.create(base), false), base);
+        // Same convention as N5AmazonS3Reader: the key-value access is rooted at
+        // s3://bucket/key and the container base path is the bare key.
+        final String containerUri = "s3://" + bucket + "/" + cleanKey;
+        return openZarrReader(new AmazonS3KeyValueAccess(s3, URI.create(containerUri), false),
+                cleanKey);
     }
 
     /**
